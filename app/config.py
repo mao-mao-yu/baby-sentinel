@@ -11,6 +11,7 @@ _DEFAULTS: dict = {
     "ble_address":            "AA:BB:CC:DD:EE:FF",
     "tapo_rtsp":              "rtsp://YOUR_USER:YOUR_PASSWORD@192.168.x.x:554/stream1",
     "ffmpeg_path":            "",
+    "go2rtc_path":            "",
     # ── Ports ────────────────────────────────────────────────────────────
     "web_host":               "0.0.0.0",
     "web_port":               8080,

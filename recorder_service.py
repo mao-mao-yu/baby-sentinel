@@ -22,7 +22,7 @@ import time
 import urllib.request
 from datetime import date, datetime
 
-from app.config import CFG, REC_DIR, log
+from app.config import BASE_DIR, CFG, REC_DIR, log
 
 # ── 配置 ──────────────────────────────────────────────────────────────
 
@@ -40,8 +40,15 @@ def _day_dir(d: date | None = None) -> str:
 
 def _ffmpeg_bin() -> str | None:
     p = CFG.get("ffmpeg_path", "").strip()
-    if p and os.path.exists(p):
-        return p
+    if p:
+        full = p if os.path.isabs(p) else os.path.join(BASE_DIR, p)
+        if os.path.exists(full):
+            return full
+    # auto-detect in project bin/
+    for name in ("ffmpeg.exe", "ffmpeg"):
+        candidate = os.path.join(BASE_DIR, "bin", name)
+        if os.path.exists(candidate):
+            return candidate
     return shutil.which("ffmpeg")
 
 

@@ -33,7 +33,11 @@ with open(CONFIG_FILE, encoding="utf-8") as _f:
 
 MANAGER_PORT = CFG.get("manager_port", 9091)
 _GO2RTC_EXE  = "go2rtc.exe" if sys.platform == "win32" else "go2rtc"
-GO2RTC_BIN   = os.path.join(BASE_DIR, "bin", _GO2RTC_EXE)
+_go2rtc_p    = CFG.get("go2rtc_path", "").strip()
+if _go2rtc_p:
+    GO2RTC_BIN = _go2rtc_p if os.path.isabs(_go2rtc_p) else os.path.join(BASE_DIR, _go2rtc_p)
+else:
+    GO2RTC_BIN = os.path.join(BASE_DIR, "bin", _GO2RTC_EXE)
 
 
 def _gen_go2rtc_yaml():

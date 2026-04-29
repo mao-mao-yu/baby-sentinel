@@ -76,16 +76,57 @@ if (Test-Path $go2rtcPath) {
     }
 }
 
+# 将路径写入 config.json（仅当 go2rtc_path 为空时更新）
+if ((Test-Path "config.json") -and (Test-Path $go2rtcPath)) {
+    & ".\venv\Scripts\python.exe" - @'
+import json
+with open("config.json") as f: c = json.load(f)
+if not c.get("go2rtc_path"):
+    c["go2rtc_path"] = "bin/go2rtc.exe"
+    with open("config.json", "w") as f: json.dump(c, f, indent=2, ensure_ascii=False)
+    print("   !!  config.json: go2rtc_path -> bin/go2rtc.exe")
+'@
+}
+
 # ── 5. ffmpeg ─────────────────────────────────────────────────────────
-Write-Step "检查 ffmpeg"
-$ffmpegInPath = Get-Command ffmpeg -ErrorAction SilentlyContinue
-if ($ffmpegInPath) {
-    Write-Ok "已在 PATH: $($ffmpegInPath.Source)"
-    Write-Warn "提示: config.json 中 ffmpeg_path 留空即可自动使用"
+Write-Step "检查 ffmpeg (下载到 bin\)"
+$ffmpegBin = "bin\ffmpeg.exe"
+if (Test-Path $ffmpegBin) {
+    Write-Ok "已存在: $ffmpegBin"
 } else {
-    Write-Warn "未在 PATH 中找到 ffmpeg"
-    Write-Warn "请下载 ffmpeg 并在 config.json 的 ffmpeg_path 中填写完整路径"
-    Write-Warn "下载: https://github.com/BtbN/FFmpeg-Builds/releases"
+    Write-Warn "未找到 $ffmpegBin，正在从 GitHub 下载..."
+    $zipUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
+    $zipTmp = "bin\ffmpeg-tmp.zip"
+    try {
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipTmp -UseBasicParsing
+        Expand-Archive $zipTmp -DestinationPath "bin\ffmpeg-tmp" -Force
+        $exe = Get-ChildItem "bin\ffmpeg-tmp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+        if ($exe) {
+            Copy-Item $exe.FullName $ffmpegBin
+            Write-Ok "ffmpeg 下载完成"
+        } else {
+            Write-Warn "zip 中未找到 ffmpeg.exe"
+        }
+    } catch {
+        Write-Warn "下载失败: $_"
+        Write-Warn "请手动下载: $zipUrl"
+        Write-Warn "解压后将 ffmpeg.exe 放到 bin\ffmpeg.exe"
+    } finally {
+        Remove-Item $zipTmp -ErrorAction SilentlyContinue
+        Remove-Item "bin\ffmpeg-tmp" -Recurse -ErrorAction SilentlyContinue
+    }
+}
+
+# 将路径写入 config.json（仅当 ffmpeg_path 为空时更新）
+if ((Test-Path "config.json") -and (Test-Path $ffmpegBin)) {
+    & ".\venv\Scripts\python.exe" - @'
+import json
+with open("config.json") as f: c = json.load(f)
+if not c.get("ffmpeg_path"):
+    c["ffmpeg_path"] = "bin/ffmpeg.exe"
+    with open("config.json", "w") as f: json.dump(c, f, indent=2, ensure_ascii=False)
+    print("   !!  config.json: ffmpeg_path -> bin/ffmpeg.exe")
+'@
 }
 
 # ── 6. 配置文件 ───────────────────────────────────────────────────────

@@ -74,21 +74,58 @@ else
     fi
 fi
 
+# 将路径写入 config.json（仅当 go2rtc_path 为空时更新）
+if [[ -f "config.json" && -f "$GO2RTC" ]]; then
+    "$PY" - <<'PYEOF'
+import json
+with open("config.json") as f: c = json.load(f)
+if not c.get("go2rtc_path"):
+    c["go2rtc_path"] = "bin/go2rtc"
+    with open("config.json", "w") as f: json.dump(c, f, indent=2, ensure_ascii=False)
+    print("   !!  config.json: go2rtc_path → bin/go2rtc")
+PYEOF
+fi
+
 # ── 5. ffmpeg ─────────────────────────────────────────────────────────
-step "检查 ffmpeg"
-if command -v ffmpeg &>/dev/null; then
-    green "已在 PATH: $(command -v ffmpeg)"
-    yellow "提示: config.json 中 ffmpeg_path 留空即可自动使用"
+step "检查 ffmpeg (下载到 bin/)"
+FFMPEG_BIN="bin/ffmpeg"
+if [[ -f "$FFMPEG_BIN" ]]; then
+    green "已存在: $FFMPEG_BIN"
 else
-    yellow "未找到 ffmpeg"
-    if command -v brew &>/dev/null; then
-        yellow "正在通过 Homebrew 安装 ffmpeg..."
-        brew install ffmpeg
-        green "ffmpeg 安装完成"
+    yellow "未找到 $FFMPEG_BIN，正在从 evermeet.cx 下载静态构建..."
+    ARCH=$(uname -m)
+    # evermeet.cx 提供 macOS 静态构建（arm64 / x86_64 均为同一端点）
+    FF_URL="https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip"
+    TMP=$(mktemp /tmp/ffmpeg_XXXXXX.zip)
+    if curl -fsSL --max-time 120 "$FF_URL" -o "$TMP" && \
+       unzip -o "$TMP" ffmpeg -d bin/ >/dev/null 2>&1; then
+        chmod +x "$FFMPEG_BIN"
+        rm -f "$TMP"
+        green "ffmpeg 下载完成 ($ARCH)"
     else
-        yellow "请安装 Homebrew 后执行: brew install ffmpeg"
-        yellow "或手动安装后在 config.json 的 ffmpeg_path 中填写路径"
+        rm -f "$TMP"
+        yellow "静态下载失败，尝试 Homebrew..."
+        if command -v brew &>/dev/null; then
+            brew install ffmpeg
+            BREW_FF=$(command -v ffmpeg)
+            cp "$BREW_FF" bin/ffmpeg && chmod +x bin/ffmpeg
+            green "ffmpeg 已从 Homebrew 复制到 bin/"
+        else
+            yellow "请安装 ffmpeg 并手动复制到 bin/ffmpeg"
+        fi
     fi
+fi
+
+# 将路径写入 config.json（仅当 ffmpeg_path 为空时更新）
+if [[ -f "config.json" && -f "$FFMPEG_BIN" ]]; then
+    "$PY" - <<'PYEOF'
+import json
+with open("config.json") as f: c = json.load(f)
+if not c.get("ffmpeg_path"):
+    c["ffmpeg_path"] = "bin/ffmpeg"
+    with open("config.json", "w") as f: json.dump(c, f, indent=2, ensure_ascii=False)
+    print("   !!  config.json: ffmpeg_path → bin/ffmpeg")
+PYEOF
 fi
 
 # ── 6. 配置文件 ───────────────────────────────────────────────────────
