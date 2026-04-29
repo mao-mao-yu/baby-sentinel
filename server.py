@@ -249,15 +249,41 @@ async def get_recording_segments(date: str):
     if not _os.path.isdir(vid_dir):
         return JSONResponse([])
     from datetime import datetime as _dt
+    import csv as _csv
+
+    # Load PTS-based timestamps from index.csv if available (written by ffmpeg -segment_list).
+    # CSV format: filename,start_pts_time,end_pts_time  — values are Unix timestamps from TAPO camera.
+    pts_map: dict[str, float] = {}
+    idx_path = _os.path.join(vid_dir, "index.csv")
+    _EPOCH_2001 = 978307200  # sanity floor: any ts > this is a real Unix timestamp
+    if _os.path.exists(idx_path):
+        try:
+            with open(idx_path, newline="", encoding="utf-8") as fh:
+                for row in _csv.reader(fh):
+                    if len(row) >= 2:
+                        fname = _os.path.basename(row[0])
+                        try:
+                            pts = float(row[1])
+                            if pts > _EPOCH_2001:
+                                pts_map[fname] = pts
+                        except ValueError:
+                            pass
+        except Exception:
+            pass
+
     segments = []
     for f in sorted(_os.listdir(vid_dir)):
         if not f.endswith(".mp4"):
             continue
-        try:
-            t = _dt.strptime(f"{date} {f[:-4]}", "%Y-%m-%d %H-%M-%S")
-            segments.append({"file": f, "ts": int(t.timestamp()), "url": f"/recordings/{date}/video/{f}"})
-        except ValueError:
-            pass
+        if f in pts_map:
+            ts = int(pts_map[f])
+        else:
+            try:
+                t = _dt.strptime(f"{date} {f[:-4]}", "%Y-%m-%d %H-%M-%S")
+                ts = int(t.timestamp())
+            except ValueError:
+                continue
+        segments.append({"file": f, "ts": ts, "url": f"/recordings/{date}/video/{f}"})
     return JSONResponse(segments)
 
 

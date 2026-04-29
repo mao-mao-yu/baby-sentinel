@@ -1517,7 +1517,7 @@ async function apiLog(entry) {
     });
     const data = await r.json();
     if (data.stats) updateBabyStats(data.stats);
-    refreshTodayLog();   // 刷新当前浏览日期的列表，不跳回今天
+    refreshTodayLog(data.entry?.ts ?? null);   // 刷新并滚动到新条目
   } catch (e) { console.warn('[BabyLog]', e); }
 }
 
@@ -2081,33 +2081,20 @@ function shiftViewDate(days) {
   refreshTodayLog();
 }
 
-// 触摸状态追踪：触摸中不做程序性滚动，避免与 iOS 惯性滚动冲突
-let _listTouching = false;
-(function() {
-  const el = document.getElementById('today-log-list');
-  if (!el) return;
-  el.addEventListener('touchstart', () => { _listTouching = true;  }, { passive: true });
-  el.addEventListener('touchend',   () => { setTimeout(() => { _listTouching = false; }, 200); }, { passive: true });
-})();
-
 // 防抖：连续触发时只执行最后一次，避免多次并发 fetch 互相覆盖
 let _refreshTimer = null;
-function refreshTodayLog() {
+function refreshTodayLog(scrollToTs = null) {
   clearTimeout(_refreshTimer);
   _refreshTimer = setTimeout(async () => {
     try {
       const r = await fetch(`/api/log/date/${viewingDate}`);
-      renderTodayLog(await r.json());
+      renderTodayLog(await r.json(), scrollToTs);
     } catch (_) {}
   }, 60);
 }
 
-function renderTodayLog(entries) {
+function renderTodayLog(entries, scrollToTs = null) {
   const list = $('today-log-list');
-
-  // 在 DOM 修改前捕获滚动位置，innerHTML='' 会同步重置 scrollTop
-  const atBottom = list.scrollHeight <= list.clientHeight + 1 ||
-                   list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
 
   renderDateStats(entries || []);
   if (!entries || !entries.length) {
@@ -2118,6 +2105,7 @@ function renderTodayLog(entries) {
   // 用 DocumentFragment 批量构建后一次性插入，减少重排次数
   const frag = document.createDocumentFragment();
   const sorted = [...entries].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  let scrollTarget = null;
   sorted.forEach(entry => {
     const [icon, desc] = fmtEntry(entry);
     const div = document.createElement('div');
@@ -2127,17 +2115,13 @@ function renderTodayLog(entries) {
       `<div class="today-entry-icon">${icon}</div>` +
       `<div class="today-entry-body">${typeof desc === 'string' ? desc.replace(/<[^>]*>/g, '') : desc}</div>`;
     div.addEventListener('click', () => showEditPicker(entry));
+    if (scrollToTs != null && entry.ts === scrollToTs) scrollTarget = div;
     frag.appendChild(div);
   });
 
-  list.innerHTML = '';       // scrollTop → 0（内存中，尚未绘制）
-  list.appendChild(frag);    // DOM 重建完毕
-
-  // 与 innerHTML='' 在同一 JS 任务内同步赋值，浏览器只绘制最终状态，不会闪烁
-  // 触摸中跳过：iOS 惯性滚动仍在运行，此时强制滚动会造成抖动
-  if (viewingDate === _sysToday && atBottom && !_listTouching) {
-    list.scrollTop = list.scrollHeight;
-  }
+  list.innerHTML = '';
+  list.appendChild(frag);
+  if (scrollTarget) scrollTarget.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 // ── Date nav init & midnight check ───────

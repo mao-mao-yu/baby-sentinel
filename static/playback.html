@@ -18,7 +18,7 @@
   --radius:  10px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
 
 /* ── Header ── */
 header {
@@ -38,7 +38,7 @@ header h1 { font-size: 1rem; font-weight: 600; flex: 1; }
 }
 
 /* ── Layout ── */
-.content { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow: hidden; }
+.content { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow-y: auto; }
 
 /* ── Video ── */
 .video-wrap {
@@ -59,15 +59,16 @@ video { width: 100%; height: 100%; display: block; object-fit: contain; }
   background: linear-gradient(transparent, rgba(0,0,0,.75));
   padding: 20px 14px 10px;
   display: flex; gap: 16px; flex-wrap: wrap; pointer-events: none;
+  justify-content: center;
 }
 .s-item { font-size: 0.78rem; color: #e8eaf0; white-space: nowrap; }
 .s-item .val { font-weight: 600; color: #fff; }
 /* 左上角时间码，仿安防摄像头风格 */
 .s-time {
-  position: absolute; top: 8px; left: 10px;
+  position: absolute; top: 8px; right: 10px;
   font-size: 0.82rem; font-family: 'Courier New', monospace;
   color: #fff; text-shadow: 0 0 4px rgba(0,0,0,.9);
-  letter-spacing: 0.5px; pointer-events: none;
+  letter-spacing: 0.5px; pointer-events: none; text-align: right;
 }
 .s-time .tc-date { font-size: 0.7rem; opacity: .75; display: block; }
 .s-time .tc-time { font-weight: 700; }
@@ -106,10 +107,10 @@ video { width: 100%; height: 100%; display: block; object-fit: contain; }
 .empty { text-align: center; color: var(--muted); padding: 40px; font-size: 0.9rem; }
 
 @media (min-width: 700px) {
-  .content { flex-direction: row; flex-wrap: wrap; }
-  .video-wrap { flex: 2; min-width: 0; aspect-ratio: 16/9; max-height: none; }
-  .right-col { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 12px; }
-  .timeline-wrap { flex-basis: 100%; }
+  .content { flex-direction: row; flex-wrap: nowrap; align-items: flex-start; overflow: hidden; }
+  .video-wrap { flex: 2; min-width: 0; aspect-ratio: 16/9; max-height: calc(100vh - 60px); }
+  .right-col { flex: 1; min-width: 220px; min-height: 0; max-height: calc(100vh - 60px); display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+  .timeline-wrap { flex-shrink: 0; }
 }
 </style>
 </head>
@@ -131,16 +132,16 @@ video { width: 100%; height: 100%; display: block; object-fit: contain; }
   <div class="video-wrap" id="video-wrap">
     <video id="vid" preload="auto" controls></video>
     <div class="video-placeholder" id="vid-placeholder">片段を選択してください</div>
+    <div class="s-time" id="sb-time">
+      <span class="tc-date" id="sb-date"></span>
+      <span class="tc-time" id="sb-clock">--:--:--</span>
+    </div>
     <div class="sensor-bar" id="sensor-bar" style="display:none">
       <div class="s-item">💨 呼吸 <span class="val" id="sb-breath">--</span> 回/分</div>
       <div class="s-item">🌡️ <span class="val" id="sb-temp">--</span> °C</div>
       <div class="s-item">🛏️ <span class="val" id="sb-posture">--</span></div>
       <div class="s-item">🔋 <span class="val" id="sb-battery">--</span>%</div>
       <div class="s-item">👶 <span class="val" id="sb-wear">--</span></div>
-      <div class="s-time" id="sb-time">
-        <span class="tc-date" id="sb-date"></span>
-        <span class="tc-time" id="sb-clock">--:--:--</span>
-      </div>
     </div>
   </div>
 
@@ -264,7 +265,7 @@ function playSeg(idx) {
 function onTimeUpdate() {
   if (_curIdx < 0) return;
   const seg    = _segments[_curIdx];
-  const realTs = seg.ts + Math.floor(this.currentTime);
+  const realTs = seg.ts + Math.round(this.currentTime);
 
   // 始终更新时间码（即使无传感器数据也能正常显示）
   setTimecode(realTs);

@@ -16,30 +16,18 @@
 
 import asyncio
 import json
-import logging
 import os
 import shutil
 import time
 import urllib.request
 from datetime import date, datetime
 
+from app.config import CFG, REC_DIR, log
+
 # ── 配置 ──────────────────────────────────────────────────────────────
 
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
-REC_DIR     = os.path.join(BASE_DIR, "recordings")
 SEGMENT_S      = CFG.get("segment_s", 180)
 SENSOR_INTVL_S = CFG.get("sensor_interval_s", 5)
-
-with open(CONFIG_FILE, encoding="utf-8") as _f:
-    CFG = json.load(_f)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)-5s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("Recorder")
 
 # ── 工具函数 ──────────────────────────────────────────────────────────
 
@@ -127,7 +115,8 @@ async def camera_record_loop() -> None:
     while True:
         today   = date.today()
         day_dir = _day_dir(today)
-        out_pat = os.path.join(day_dir, "video", "%H-%M-%S.mp4")
+        out_pat  = os.path.join(day_dir, "video", "%H-%M-%S.mp4")
+        idx_path = os.path.join(day_dir, "video", "index.csv")
         log.info(f"[Camera] 连续分段录制 → {day_dir}/video/")
 
         try:
@@ -142,7 +131,9 @@ async def camera_record_loop() -> None:
                 "-f", "segment",
                 "-segment_time", str(SEGMENT_S),
                 "-segment_format", "mp4",
-                "-reset_timestamps", "1",
+                "-segment_list", idx_path,
+                "-segment_list_type", "csv",
+                "-segment_list_flags", "+cache",
                 "-strftime", "1",
                 out_pat,
                 stdout=asyncio.subprocess.DEVNULL,
