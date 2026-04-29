@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# BabySentinel 安装脚本 (macOS / Linux)
-# 用法: bash setup.sh
-# 可选: bash setup.sh --with-cry   # 同时安装哭声检测依赖
+# BabySentinel setup script (macOS / Linux)
+# Usage: bash setup.sh
 
 set -e
-WITH_CRY=0
-[[ "$1" == "--with-cry" ]] && WITH_CRY=1
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
@@ -45,12 +42,6 @@ $PIP install --upgrade pip -q
 $PIP install -r requirements.txt
 green "核心依赖安装完成"
 
-if [[ $WITH_CRY -eq 1 ]]; then
-    step "安装哭声检测依赖 (tensorflow ~2 GB)"
-    $PIP install -r requirements-cry.txt
-    green "哭声检测依赖安装完成"
-fi
-
 # ── 4. go2rtc ─────────────────────────────────────────────────────────
 step "检查 go2rtc"
 mkdir -p bin
@@ -78,10 +69,10 @@ fi
 if [[ -f "config.json" && -f "$GO2RTC" ]]; then
     "$PY" - <<'PYEOF'
 import json
-with open("config.json") as f: c = json.load(f)
+with open("config.json", encoding="utf-8") as f: c = json.load(f)
 if not c.get("go2rtc_path"):
     c["go2rtc_path"] = "bin/go2rtc"
-    with open("config.json", "w") as f: json.dump(c, f, indent=2, ensure_ascii=False)
+    with open("config.json", "w", encoding="utf-8") as f: json.dump(c, f, indent=2, ensure_ascii=False)
     print("   !!  config.json: go2rtc_path → bin/go2rtc")
 PYEOF
 fi
@@ -120,10 +111,10 @@ fi
 if [[ -f "config.json" && -f "$FFMPEG_BIN" ]]; then
     "$PY" - <<'PYEOF'
 import json
-with open("config.json") as f: c = json.load(f)
+with open("config.json", encoding="utf-8") as f: c = json.load(f)
 if not c.get("ffmpeg_path"):
     c["ffmpeg_path"] = "bin/ffmpeg"
-    with open("config.json", "w") as f: json.dump(c, f, indent=2, ensure_ascii=False)
+    with open("config.json", "w", encoding="utf-8") as f: json.dump(c, f, indent=2, ensure_ascii=False)
     print("   !!  config.json: ffmpeg_path → bin/ffmpeg")
 PYEOF
 fi
