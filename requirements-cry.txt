@@ -1,0 +1,5 @@
+# 哭声检测（可选，体积约 2 GB，默认禁用）
+tensorflow
+tensorflow-hub
+numpy
+soundfile

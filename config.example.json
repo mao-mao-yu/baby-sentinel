@@ -1,0 +1,43 @@
+{
+  "_connections": "── 连接设置 / Connections / 接続設定 ──",
+  "ble_address":            "AA:BB:CC:DD:EE:FF",
+  "tapo_rtsp":              "rtsp://YOUR_USER:YOUR_PASSWORD@192.168.x.x:554/stream1",
+  "ffmpeg_path":            "",
+
+  "_ports": "── 端口配置 / Ports / ポート設定 ──",
+  "web_host":               "0.0.0.0",
+  "web_port":               8080,
+  "go2rtc_port":            1984,
+  "ble_port":               8082,
+  "manager_port":           9091,
+
+  "_recording": "── 录像 / Recording / 録画設定 ──",
+  "segment_s":              180,
+  "sensor_interval_s":      5,
+
+  "_ble": "── 蓝牙时序 / BLE Timing / BLE接続タイミング ──",
+  "ble_scan_timeout_s":     20,
+  "ble_connect_timeout_s":  15,
+  "ble_poll_interval_s":    5,
+  "ble_reconnect_delay_s":  10,
+
+  "_alerts": "── 告警行为 / Alerts / アラート設定 ──",
+  "prone_alert_cooldown_s": 300,
+  "feed_repeat_s":          1800,
+
+  "_notifications": "── 通知推送 / Notifications / 通知設定 ──",
+  "discord_token":          "",
+  "discord_channel_ids":    [],
+  "discord_user_ids":       [],
+
+  "_misc": "── 其他 / Misc / その他 ──",
+  "log_level":              "INFO",
+
+  "_baby": "── 宝宝信息 / Baby Profile / ベビー情報 ──",
+  "baby": {
+    "birth_date":            "YYYYMMDD",
+    "weight_g":              0,
+    "feed_type":             "formula",
+    "feed_interval_min":     150
+  }
+}

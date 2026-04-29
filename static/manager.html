@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BabySentinel Manager</title>
+<style>
+:root {
+  --bg:      #0f1117;
+  --card:    #1a1d27;
+  --border:  #2a2d3a;
+  --text:    #e8eaf0;
+  --muted:   #6b7280;
+  --green:   #22c55e;
+  --red:     #ef4444;
+  --yellow:  #f59e0b;
+  --blue:    #3b82f6;
+  --radius:  10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; min-height: 100vh; }
+
+header {
+  padding: 12px 20px; background: var(--card);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px;
+}
+header h1 { font-size: 1rem; font-weight: 600; flex: 1; }
+.header-link { font-size: 0.82rem; color: var(--blue); text-decoration: none; }
+.header-link:hover { text-decoration: underline; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px; padding: 16px;
+}
+
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+.card-head {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: flex-start; gap: 10px;
+}
+.card-icon { font-size: 1.5rem; line-height: 1; }
+.card-info { flex: 1; min-width: 0; }
+.card-name { font-weight: 600; font-size: 0.95rem; }
+.card-desc { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+
+.status-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot.running  { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 1.8s infinite; }
+.dot.stopped  { background: var(--muted); }
+.dot.crashed  { background: var(--red); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.status-text { font-size: 0.78rem; color: var(--muted); }
+.status-text.running { color: var(--green); }
+.status-text.crashed { color: var(--red); }
+.pid-text { font-size: 0.72rem; color: var(--muted); margin-left: auto; }
+
+.card-btns {
+  display: flex; gap: 6px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.btn {
+  flex: 1; padding: 5px 0; border-radius: 6px; border: 1px solid var(--border);
+  background: none; color: var(--text); cursor: pointer; font-size: 0.8rem;
+  transition: background .15s, border-color .15s;
+}
+.btn:hover { background: var(--border); }
+.btn.start:hover  { background: #14532d; border-color: var(--green); color: var(--green); }
+.btn.stop:hover   { background: #450a0a; border-color: var(--red);   color: var(--red); }
+.btn.restart:hover{ background: #1e3a5f; border-color: var(--blue);  color: var(--blue); }
+.btn:disabled { opacity: .4; cursor: default; }
+
+.log-box {
+  flex: 1; background: #0a0c12; font-family: monospace; font-size: 0.72rem;
+  color: #9ca3af; overflow-y: auto; height: 220px;
+  padding: 8px 10px; line-height: 1.5;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.log-box .ts { color: #4b5563; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🛠 BabySentinel Manager</h1>
+  <a class="header-link" id="link-main" href="#" target="_blank">→ 主界面</a>
+  <a class="header-link" id="link-playback" href="#" target="_blank">→ 回放</a>
+</header>
+
+<div class="grid" id="grid"></div>
+
+<script>
+(function() {
+  const base = `http://${location.hostname}:__WEB_PORT__`;
+  document.getElementById('link-main').href     = base + '/';
+  document.getElementById('link-playback').href = base + '/playback';
+})();
+
+// 服务列表完全从 API 动态生成，无需在前端硬编码
+let _svcOrder  = [];   // 首次 poll 后填充
+let _autoScroll = {};  // svc → bool
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderCard(svc, data) {
+  const el = document.getElementById(`card-${svc}`);
+  if (!el) return;
+
+  const st    = data.status;
+  const dotCl = st === 'running' ? 'running' : st === 'crashed' ? 'crashed' : 'stopped';
+  const stLbl = st === 'running' ? '运行中' : st === 'crashed' ? '已崩溃' : '已停止';
+
+  el.querySelector('.dot').className        = `dot ${dotCl}`;
+  el.querySelector('.status-text').className  = `status-text ${dotCl}`;
+  el.querySelector('.status-text').textContent = stLbl
+    + (data.started_at ? `  ${data.started_at}` : '');
+  el.querySelector('.pid-text').textContent = data.pid ? `PID ${data.pid}` : '';
+
+  const startBtn   = el.querySelector('.btn.start');
+  const stopBtn    = el.querySelector('.btn.stop');
+  const restartBtn = el.querySelector('.btn.restart');
+  startBtn.disabled   = st === 'running';
+  stopBtn.disabled    = st === 'stopped';
+  restartBtn.disabled = false;
+
+  if (data.desc) {
+    const descEl = el.querySelector('.card-desc');
+    if (descEl) descEl.textContent = data.desc;
+  }
+
+  // Logs
+  const box  = el.querySelector('.log-box');
+  const logs = data.logs || [];
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
+
+  box.innerHTML = logs.map(line => {
+    const m = line.match(/^(\d{2}:\d{2}:\d{2})\s+(.*)/s);
+    if (m) return `<div><span class="ts">${m[1]}</span>  ${escHtml(m[2])}</div>`;
+    return `<div>${escHtml(line)}</div>`;
+  }).join('');
+
+  if (_autoScroll[svc] !== false && atBottom) {
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+function buildCard(svc, meta) {
+  const div = document.createElement('div');
+  div.className = 'card';
+  div.id = `card-${svc}`;
+  div.innerHTML = `
+    <div class="card-head">
+      <div class="card-icon">${meta.icon}</div>
+      <div class="card-info">
+        <div class="card-name">${escHtml(meta.name)}</div>
+        <div class="card-desc">${escHtml(meta.desc || '—')}</div>
+        <div class="status-row">
+          <div class="dot stopped"></div>
+          <span class="status-text stopped">已停止</span>
+          <span class="pid-text"></span>
+        </div>
+      </div>
+    </div>
+    <div class="card-btns">
+      <button class="btn start"   onclick="action('${svc}','start')">▶ 启动</button>
+      <button class="btn stop"    onclick="action('${svc}','stop')">■ 停止</button>
+      <button class="btn restart" onclick="action('${svc}','restart')">↺ 重启</button>
+    </div>
+    <div class="log-box"></div>
+  `;
+  div.querySelector('.log-box').addEventListener('scroll', function() {
+    _autoScroll[svc] = this.scrollHeight - this.scrollTop - this.clientHeight < 30;
+  });
+  return div;
+}
+
+const grid = document.getElementById('grid');
+
+async function poll() {
+  try {
+    const res  = await fetch('/api/manager/status');
+    const data = await res.json();
+
+    // 首次 poll：根据 API 返回的服务列表动态建卡
+    if (_svcOrder.length === 0) {
+      _svcOrder = Object.keys(data);
+      _svcOrder.forEach(svc => {
+        _autoScroll[svc] = true;
+        grid.appendChild(buildCard(svc, data[svc]));
+      });
+    }
+
+    _svcOrder.forEach(svc => {
+      if (data[svc]) renderCard(svc, data[svc]);
+    });
+  } catch(_) {}
+}
+
+async function action(svc, cmd) {
+  try {
+    await fetch(`/api/manager/${svc}/${cmd}`, { method: 'POST' });
+    setTimeout(poll, 300);
+  } catch(_) {}
+}
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

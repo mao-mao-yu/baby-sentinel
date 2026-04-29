@@ -1,0 +1,2252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BabySentinel</title>
+<style>
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Base ── */
+:root {
+  --bg:      #0d1117;
+  --surface: #161b22;
+  --border:  #30363d;
+  --text:    #e6edf3;
+  --muted:   #8b949e;
+  --green:   #3fb950;
+  --yellow:  #d29922;
+  --red:     #f85149;
+  --blue:    #58a6ff;
+  --radius:  10px;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+/* ── Layout ── */
+.layout {
+  display: grid;
+  grid-template-rows: 52px 1fr auto;
+  height: 100vh;
+  height: 100dvh; /* iOS Safari: excludes address bar */
+  overflow: hidden;
+}
+
+/* ── Header ── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+.header-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.header-title span { margin-right: 8px; }
+
+.badges { display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; white-space: nowrap; }
+.header-nav { display: flex; gap: 6px; align-items: center; }
+
+.badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  padding: 3px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: all .3s;
+}
+
+.badge .dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: background .3s;
+}
+
+.badge.ok .dot  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.badge.err .dot { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+
+.clock {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 1px;
+  padding: 0 6px;
+}
+
+/* ── Main content ── */
+.main {
+  display: grid;
+  grid-template-columns: 1fr minmax(380px, 20%);
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Video panel ── */
+.video-panel {
+  position: relative;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  flex: 0 0 50vh;
+  min-height: 120px;
+}
+
+video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.video-placeholder {
+  text-align: center;
+  color: var(--muted);
+}
+.video-placeholder .icon { font-size: 3rem; margin-bottom: 10px; }
+.video-placeholder p { font-size: 0.85rem; }
+
+.cam-badge {
+  position: absolute;
+  top: 10px; left: 10px;
+  background: rgba(0,0,0,.7);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.cam-badge .dot { width:6px; height:6px; border-radius:50%; background:var(--muted); }
+.cam-badge.live .dot { background:var(--red); box-shadow:0 0 6px var(--red); animation: pulse 1.5s infinite; }
+.cam-badge.live { color: var(--text); }
+
+.mute-btn {
+  position: absolute;
+  bottom: 10px; right: 10px;
+  z-index: 10;
+  background: rgba(0,0,0,.65);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 1.1rem;
+  width: 36px; height: 36px;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  transition: background .2s;
+}
+.mute-btn:hover { background: rgba(255,255,255,.15); }
+.mute-btn.visible { display: flex; }
+
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* ── Left panel (video + monitoring) ── */
+.left-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+/* ── Monitor section (below video on desktop) ── */
+.monitor-section {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.sense-u-section {
+  flex: 0 0 auto;
+  overflow: hidden;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.monitor-section::-webkit-scrollbar { width: 4px; }
+.monitor-section::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Baby log panel (right column, full height) ── */
+.baby-panel {
+  overflow: hidden;
+  padding: clamp(6px, 2cqi, 14px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(4px, 1.2cqi, 10px);
+  min-height: 0;
+}
+
+/* ── Mobile tab bar ── */
+.mobile-tabs {
+  display: none;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.tab-btn {
+  flex: 1;
+  padding: 10px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: color .2s, border-color .2s;
+}
+.tab-btn.active { color: var(--text); border-bottom-color: var(--blue); }
+
+/* ── Sensor grid ── */
+.sense-u-section { container-type: inline-size; container-name: sense-u; }
+.baby-panel       { container-type: inline-size; container-name: baby-log; }
+
+.sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  height: clamp(140px, 22vh, 200px);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: border-color .3s;
+  min-height: 0;
+}
+
+.card.alert-card { border-color: var(--red); }
+.card.warn-card  { border-color: var(--yellow); }
+
+.card-label {
+  font-size: clamp(0.6rem, 1.8cqi, 0.75rem);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.card-body {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.card-value {
+  font-size: clamp(1.1rem, 5cqi, 1.9rem);
+  font-weight: 700;
+  line-height: 1;
+  transition: color .3s;
+}
+
+.card-unit {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.card-sub {
+  font-size: clamp(0.6rem, 1.6cqi, 0.72rem);
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* ── Sensor cards (呼吸 / 体温 / 姿势) 居中填充布局 ── */
+.sensor-card {
+  align-items: center;
+  text-align: center;
+  padding: 8px 6px 8px;
+}
+.sensor-card .card-label { width: 100%; }
+.sensor-card .card-value { font-size: clamp(1.4rem, 6cqi, 2.2rem); }
+.sensor-card .card-sub   { font-size: clamp(0.58rem, 1.5cqi, 0.7rem); }
+
+/* 居中占满剩余空间 */
+.card-center {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  overflow: hidden;
+  gap: 2px;
+}
+
+/* 姿势图片：等比例填充，不超出 */
+.posture-img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  display: block;
+}
+#card-posture .card-center { padding: 6px; }
+
+/* status row */
+.status-row {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.status-pill {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  text-align: center;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+.status-pill .dot { width:6px;height:6px;border-radius:50%;background:var(--muted); }
+.status-pill.ok .dot  { background:var(--green); }
+.status-pill.ok       { color: var(--text); }
+.status-pill.warn     { border-color: var(--yellow); color: var(--yellow); }
+.status-pill.err      { border-color: var(--red);    color: var(--red); }
+.status-pill-sub { font-size:0.7em; color:var(--muted); margin-left:1px; }
+
+/* ── Alert log ── */
+.alert-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.alert-section h4 {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+  flex-shrink: 0;
+}
+
+.alert-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 4px;
+}
+
+.alert-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  border-left: 3px solid var(--border);
+  background: var(--surface);
+  animation: slideIn .25s ease;
+}
+
+@keyframes slideIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
+
+.alert-item.danger  { border-left-color: var(--red);    background: rgba(248,81,73,.08); }
+.alert-item.warning { border-left-color: var(--yellow); background: rgba(210,153,34,.08); }
+.alert-item.info    { border-left-color: var(--blue);   background: rgba(88,166,255,.08); }
+
+.alert-time { color: var(--muted); flex-shrink: 0; }
+.alert-msg  { flex: 1; }
+
+/* ── Bottom alert banner ── */
+.alert-banner {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  min-height: 48px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+  background: rgba(248,81,73,.15);
+  color: var(--red);
+  animation: flash 1s ease infinite alternate;
+}
+.alert-banner.show { display: flex; }
+
+@keyframes flash { from{opacity:1} to{opacity:.6} }
+
+.banner-close {
+  cursor: pointer;
+  font-size: 1.2rem;
+  opacity: .6;
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 0 4px;
+}
+.banner-close:hover { opacity: 1; }
+
+/* ── Baby Log Section ── */
+.baby-log-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.baby-log-section h4 {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.feed-countdown { color: var(--green); transition: color .3s; font-size: clamp(0.85rem, 4cqi, 1.25rem); }
+.feed-countdown.warn    { color: var(--yellow); }
+.feed-countdown.overdue { color: var(--red); }
+
+.btn-row {
+  display: flex;
+  gap: 5px;
+}
+
+.quick-btn {
+  flex: 1;
+  padding: clamp(5px, 1.5cqi, 9px) 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: clamp(0.62rem, 2.8cqi, 0.82rem);
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
+  white-space: nowrap;
+  text-align: center;
+}
+.quick-btn:hover   { background: rgba(255,255,255,.08); }
+.quick-btn:active  { background: rgba(255,255,255,.14); }
+.quick-btn:disabled { opacity: .35; cursor: default; }
+
+/* ── Log category tabs ── */
+.log-tabs {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.log-tab {
+  flex: 1;
+  padding: 5px 1px 4px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: clamp(0.56rem, 2.1cqi, 0.7rem);
+  cursor: pointer;
+  text-align: center;
+  white-space: nowrap;
+  transition: color .15s, border-color .15s;
+  margin-bottom: -1px;
+}
+.log-tab.active { color: var(--text); border-bottom-color: #58a6ff; }
+.log-tab:hover:not(.active) { color: var(--text); }
+.log-tab-panel { display: none; }
+.log-tab-panel.active { display: flex; flex-direction: column; gap: 5px; }
+
+.log-stats-row {
+  display: flex;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  justify-content: space-around;
+  padding: 2px 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Log picker — unified fixed overlay */
+.log-picker {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.log-picker-inner {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  width: 90%;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.log-picker-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text);
+}
+
+.log-picker-body { display: flex; flex-direction: column; gap: 10px; }
+
+.amount-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 7px;
+}
+
+.amount-btn {
+  padding: 10px 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+  text-align: center;
+  transition: background .15s, border-color .15s;
+}
+.amount-btn:hover { background: rgba(255,255,255,.1); }
+.amount-btn.rec   { border-color: var(--blue); color: var(--blue); font-weight: 600; }
+
+/* Segmented control */
+.seg-ctrl {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.seg-opt {
+  flex: 1;
+  padding: 7px 4px;
+  background: var(--bg);
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  text-align: center;
+}
+.seg-opt:last-child { border-right: none; }
+.seg-opt.active     { background: rgba(88,166,255,.18); color: var(--blue); font-weight: 600; }
+
+/* Picker section with label */
+.picker-section { display: flex; flex-direction: column; gap: 5px; }
+.picker-label   { font-size: 0.72rem; color: var(--muted); }
+
+/* Color picker */
+.color-picker {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.color-btn {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color .15s, transform .15s;
+}
+.color-btn:hover  { transform: scale(1.15); }
+.color-btn.active { border-color: var(--blue); transform: scale(1.1); }
+
+/* Number input */
+.num-ctrl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.num-btn {
+  width: 34px; height: 34px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 1.2rem;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s;
+}
+.num-btn:hover { background: rgba(255,255,255,.1); }
+.num-display {
+  width: 80px;
+  text-align: center;
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: none;
+  border: none;
+  color: var(--text);
+  -moz-appearance: textfield;
+}
+.num-display::-webkit-outer-spin-button,
+.num-display::-webkit-inner-spin-button { -webkit-appearance: none; }
+.num-unit { font-size: 0.8rem; color: var(--muted); min-width: 24px; }
+
+/* ── iOS drum-roll time picker ── */
+.drum-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.drum-colon {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 2px;
+}
+.drum-col {
+  position: relative;
+  width: 54px;
+  height: 150px;
+  overflow: hidden;
+  cursor: grab;
+}
+.drum-col:active { cursor: grabbing; }
+.drum-col-inner {
+  position: absolute;
+  left: 0; right: 0;
+  will-change: transform;
+}
+.drum-item {
+  height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  transition: color .15s, font-size .15s;
+}
+.drum-item.selected {
+  color: var(--text);
+  font-size: 1.55rem;
+}
+.drum-highlight {
+  position: absolute;
+  top: 50px; left: 0; right: 0;
+  height: 50px;
+  border-top: 1.5px solid var(--border);
+  border-bottom: 1.5px solid var(--border);
+  background: rgba(255,255,255,.04);
+  pointer-events: none;
+  border-radius: 4px;
+}
+
+/* Confirm + cancel buttons */
+.picker-confirm {
+  width: 100%;
+  padding: 9px;
+  background: rgba(88,166,255,.18);
+  border: 1px solid var(--blue);
+  border-radius: 6px;
+  color: var(--blue);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .2s;
+}
+.picker-confirm:hover { background: rgba(88,166,255,.28); }
+
+.picker-cancel {
+  width: 100%;
+  padding: 8px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color .2s, color .2s;
+}
+.picker-cancel:hover { border-color: var(--text); color: var(--text); }
+
+/* ── Responsive ── */
+
+/* 手机竖屏：tab 切换 */
+@media (max-width: 768px) {
+  .main { display: flex; flex-direction: column; overflow: hidden; }
+  .mobile-tabs { display: flex; }
+  .mobile-tab-hidden { display: none !important; }
+  .left-panel { flex: 1; overflow: hidden; border-right: none; }
+  .video-panel { flex: 0 0 42vh; border-bottom: 1px solid var(--border); }
+  .monitor-section { flex: 1; overflow-y: auto; }
+  .sensor-grid { grid-template-columns: repeat(3, 1fr); }
+  .alert-section { flex: 1; border-top: 1px solid var(--border); }
+  .baby-panel { flex: 1; overflow: hidden; }
+
+  /* 导航按钮移入底部 tab 栏 */
+  .header-nav { display: none; }
+
+  /* 状态 badge 只显示指示点，不显示文字，节省 header 空间 */
+  .badge span { display: none; }
+  .badge { padding: 3px 6px; gap: 0; }
+
+  /* tab 栏四格等分，字号略缩 */
+  .tab-btn { font-size: 0.78rem; padding: 10px 2px; }
+  .mobile-tabs a.tab-btn {
+    display: flex; align-items: center; justify-content: center;
+    text-decoration: none; color: var(--muted);
+    border-bottom: 2px solid transparent;
+    transition: color .2s, border-color .2s;
+  }
+  .mobile-tabs a.tab-btn:hover { color: var(--text); }
+}
+
+/* ── Log Timeline View ── */
+
+/* 矮屏幕（iPad 横屏 / 小笔记本）*/
+@media (max-height: 700px) {
+  .layout { grid-template-rows: 44px 1fr auto; }
+  .monitor-section { padding: 4px 8px; gap: 4px; }
+  .sense-u-section { padding: 6px 8px; gap: 4px; }
+  .sensor-grid { gap: 5px; }
+  .card { padding: 5px 8px 4px; gap: 1px; }
+  .sensor-card { padding: 5px 4px 5px; }
+  .card-body { margin-top: 2px; }
+  .status-pill { padding: 3px 8px; font-size: 0.7rem; }
+}
+
+/* ── Log date navigation bar ── */
+.log-date-nav-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0 0;
+}
+.log-date-nav-label {
+  flex: 1;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.5px;
+}
+.log-date-nav-label .log-today-tag {
+  font-size: 0.7rem;
+  color: var(--green);
+  font-weight: 500;
+  margin-left: 4px;
+}
+.log-nav-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 1.1rem;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: color .15s, border-color .15s;
+}
+.log-nav-btn:disabled { opacity: 0.25; cursor: default; }
+.log-nav-btn:not(:disabled):hover { color: var(--text); border-color: var(--text); }
+
+/* ── Today's log list ── */
+.today-log-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.today-log-list::-webkit-scrollbar { width: 3px; }
+.today-log-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+/* 阻止 iOS 滚动链传播到父容器，防止抖动 */
+.today-log-list { overscroll-behavior: contain; }
+
+.today-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background .15s;
+  user-select: none;
+}
+.today-entry:last-child { border-bottom: none; }
+.today-entry:hover  { background: rgba(255,255,255,.07); }
+.today-entry:active { background: rgba(255,255,255,.13); }
+.today-entry-time { color: var(--muted); width: 36px; flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: 0.75rem; }
+.today-entry-icon { flex-shrink: 0; }
+.today-entry-body { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Delete button inside picker */
+.picker-delete {
+  width: 100%;
+  padding: 8px;
+  background: rgba(248,81,73,.12);
+  border: 1px solid rgba(248,81,73,.4);
+  border-radius: 6px;
+  color: var(--red);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background .2s;
+}
+.picker-delete:hover { background: rgba(248,81,73,.22); }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ── Header ── -->
+  <header>
+    <div class="header-title">
+      <span>🍼</span> BabySentinel
+    </div>
+    <div class="badges">
+      <div class="badge" id="badge-ble">
+        <div class="dot"></div>
+        <span id="badge-ble-text" data-i18n="bleOff">传感器</span>
+      </div>
+      <div class="badge" id="badge-cam">
+        <div class="dot"></div>
+        <span id="badge-cam-text" data-i18n="camOff">摄像头</span>
+      </div>
+      <div class="clock" id="clock">--:--:--</div>
+      <div class="header-nav">
+        <a href="/playback" style="text-decoration:none">
+          <button style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;white-space:nowrap">📹 回放</button>
+        </a>
+        <a id="nav-manager" href="#" target="_blank" style="text-decoration:none">
+          <button style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;white-space:nowrap">🛠 管理</button>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Main ── -->
+  <div class="main">
+
+    <!-- Mobile tab bar -->
+    <div class="mobile-tabs" id="mobile-tabs">
+      <button class="tab-btn" id="tab-monitor" onclick="switchTab('monitor')">📹 监控</button>
+      <button class="tab-btn active" id="tab-baby" onclick="switchTab('baby')">🍼 育儿</button>
+      <a href="/playback" class="tab-btn">📼 回放</a>
+      <a id="tab-manager" href="#" class="tab-btn" target="_blank">🛠 管理</a>
+    </div>
+
+    <!-- 左侧面板：视频 + 传感器监控（手机默认隐藏）-->
+    <div class="left-panel mobile-tab-hidden" id="panel-monitor">
+
+      <!-- 视频面板 -->
+      <div class="video-panel">
+        <div class="cam-badge" id="cam-badge">
+          <div class="dot"></div>
+          <span id="cam-badge-text" data-i18n="offline">离线</span>
+        </div>
+        <button class="mute-btn" id="mute-btn">🔇</button>
+        <video id="video" autoplay muted playsinline></video>
+        <div class="video-placeholder" id="video-placeholder">
+          <div class="icon">📹</div>
+          <p data-i18n="camWaiting">等待摄像头连接...</p>
+          <p style="margin-top:6px;font-size:.75rem" data-i18n="camHint">请在 config.json 中填写 tapo_rtsp</p>
+        </div>
+      </div>
+
+      <!-- 监控信息 -->
+      <div class="monitor-section">
+
+        <div class="sense-u-section">
+
+        <!-- 状态行：佩戴 + 连接 + 电量 + 更新时间 -->
+        <div class="status-row">
+          <div class="status-pill" id="pill-wearing">
+            <div class="dot"></div>
+            <span id="txt-wearing" data-i18n="wearUnknown">佩戴状态未知</span>
+          </div>
+          <div class="status-pill" id="card-status">
+            <span id="val-status">--</span>
+            <span id="sub-status" class="status-pill-sub">Sense-U</span>
+          </div>
+          <div class="status-pill" id="card-battery">
+            <span id="batt-icon">🔋</span>
+            <span id="val-battery">--</span><span id="sub-battery" style="font-size:0.7em;color:var(--muted)">%</span>
+          </div>
+          <div class="status-pill" id="pill-update">
+            <div class="dot"></div>
+            <span id="txt-update">--</span>
+          </div>
+        </div>
+
+        <!-- 主传感器：呼吸 + 体温 + 姿势，三等分剩余空间 -->
+        <div class="sensor-grid" id="sensor-grid">
+
+          <div class="card sensor-card" id="card-breath">
+            <div class="card-label" data-i18n="labelBreath">💨 呼吸</div>
+            <div class="card-center">
+              <div class="card-value" id="val-breath">--</div>
+              <div class="card-unit" data-i18n="unitBpm">次/min</div>
+            </div>
+            <div class="card-sub" id="sub-breath" data-i18n="waiting">等待数据...</div>
+          </div>
+
+          <div class="card sensor-card" id="card-temp">
+            <div class="card-label" data-i18n="labelTemp">🌡️ 体感温度</div>
+            <div class="card-center">
+              <div class="card-value" id="val-temp">--</div>
+              <div class="card-unit">°C</div>
+            </div>
+          </div>
+
+          <div class="card sensor-card" id="card-posture">
+            <div class="card-label" data-i18n="labelPosture">🛏️ 姿势</div>
+            <div class="card-center">
+              <img class="posture-img" id="posture-img" src="" alt="" style="display:none">
+              <div class="card-sub" id="posture-loading" data-i18n="postureLoading">数据获取中...</div>
+            </div>
+            <div class="card-value" id="val-posture" style="visibility:hidden">--</div>
+          </div>
+
+        </div><!-- /sensor-grid -->
+
+        </div><!-- /sense-u-section -->
+
+        <div class="alert-section">
+          <h4 data-i18n="alertTitle">⚠ 告警记录</h4>
+          <div class="alert-list" id="alert-list">
+            <div class="alert-item info" id="alert-placeholder">
+              <span class="alert-time">--:--:--</span>
+              <span class="alert-msg" data-i18n="alertWaiting">等待连接...</span>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /monitor-section -->
+    </div><!-- /left-panel -->
+
+    <!-- 右侧面板：育儿日志（手机默认显示）-->
+    <div class="baby-panel" id="panel-baby">
+
+      <div class="baby-log-section">
+        <h4 data-i18n="labelBabyLog">育儿日志</h4>
+
+        <div class="card" id="feed-cd-card">
+          <div class="card-label" data-i18n="labelNextFeed">🍼 下次喂奶</div>
+          <div class="card-body">
+            <div class="card-value feed-countdown" id="feed-countdown">--</div>
+          </div>
+          <div class="card-sub" id="feed-cd-sub">--</div>
+        </div>
+
+        <!-- 记录分类 Tab -->
+        <div class="log-tabs">
+          <button class="log-tab active" data-tab="feed"   data-i18n="tabFeed">🍼 喂奶</button>
+          <button class="log-tab"        data-tab="daily"  data-i18n="tabDaily">😴 日常</button>
+          <button class="log-tab"        data-tab="health" data-i18n="tabHealth">🌡️ 健康</button>
+          <button class="log-tab"        data-tab="other"  data-i18n="tabOther">✨ 其他</button>
+        </div>
+
+        <div class="log-tab-panel active" id="tabp-feed">
+          <div class="btn-row">
+            <button class="quick-btn" id="btn-formula"  data-i18n="btnFormula">🍼 配方奶</button>
+            <button class="quick-btn" id="btn-breast-l" data-i18n="btnBreastL">🤱 左乳</button>
+            <button class="quick-btn" id="btn-breast-r" data-i18n="btnBreastR">🤱 右乳</button>
+            <button class="quick-btn" id="btn-bottle"   data-i18n="btnBottle">🍶 瓶喂</button>
+          </div>
+        </div>
+
+        <div class="log-tab-panel" id="tabp-daily">
+          <div class="btn-row">
+            <button class="quick-btn" id="btn-sleep"  data-i18n="btnSleep">😴 入睡</button>
+            <button class="quick-btn" id="btn-wake"   data-i18n="btnWake" disabled>☀️ 醒来</button>
+            <button class="quick-btn" id="btn-wet"    data-i18n="btnWet">💧 尿尿</button>
+            <button class="quick-btn" id="btn-dirty"  data-i18n="btnDirty">💩 便便</button>
+          </div>
+        </div>
+
+        <div class="log-tab-panel" id="tabp-health">
+          <div class="btn-row">
+            <button class="quick-btn" id="btn-temp"   data-i18n="btnTemp">🌡️ 体温</button>
+            <button class="quick-btn" id="btn-height" data-i18n="btnHeight">📏 身高</button>
+            <button class="quick-btn" id="btn-weight" data-i18n="btnWeight">⚖️ 体重</button>
+          </div>
+        </div>
+
+        <div class="log-tab-panel" id="tabp-other">
+          <div class="btn-row">
+            <button class="quick-btn" id="btn-bath" data-i18n="btnBath">🛁 洗澡</button>
+            <button class="quick-btn" id="btn-pump" data-i18n="btnPump">🍼 挤奶</button>
+          </div>
+        </div>
+
+        <div class="log-date-nav-bar">
+          <button class="log-nav-btn" id="log-date-prev">‹</button>
+          <span class="log-date-nav-label" id="log-date-nav-label"></span>
+          <button class="log-nav-btn" id="log-date-next">›</button>
+        </div>
+
+        <div class="log-stats-row">
+          <span id="stat-bottle-feed">🍼 --</span>
+          <span id="stat-breast">🤱 --</span>
+        </div>
+        <div class="log-stats-row">
+          <span id="stat-diaper">💧-- 💩--</span>
+          <span id="stat-sleep">😴 --</span>
+        </div>
+
+        <div class="today-log-list" id="today-log-list">
+          <div style="text-align:center;color:var(--muted);font-size:0.8rem;padding:12px">暂无记录</div>
+        </div>
+      </div>
+
+    </div><!-- /baby-panel -->
+
+    <!-- 统一记录选择器 -->
+    <div class="log-picker" id="log-picker" style="display:none">
+      <div class="log-picker-inner">
+        <div class="log-picker-title" id="log-picker-title">记录</div>
+        <div class="log-picker-body" id="log-picker-body"></div>
+        <button class="picker-cancel" id="log-picker-cancel" data-i18n="cancel">取消</button>
+      </div>
+    </div>
+  </div><!-- /main -->
+
+  <!-- 底部告警 Banner -->
+  <div class="alert-banner" id="alert-banner">
+    <span id="banner-text">⚠️ 告警</span>
+    <button class="banner-close" id="banner-close">✕</button>
+  </div>
+
+</div><!-- /layout -->
+
+<!-- 常数配置（LANGS / SENSOR_CFG / POSTURE_ICONS 等） -->
+<script src="/static/config.js"></script>
+
+<script>
+const lang = navigator.language.startsWith('ja') ? 'ja' : 'zh';
+const T = LANGS[lang];
+
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    if (T[key] !== undefined) el.textContent = T[key];
+  });
+}
+
+// ────────────────────────────────────────
+//  Mobile tab switching
+// ────────────────────────────────────────
+function switchTab(tab) {
+  $('tab-monitor').classList.toggle('active', tab === 'monitor');
+  $('tab-baby').classList.toggle('active', tab === 'baby');
+  $('panel-monitor').classList.toggle('mobile-tab-hidden', tab !== 'monitor');
+  $('panel-baby').classList.toggle('mobile-tab-hidden', tab !== 'baby');
+}
+
+// ────────────────────────────────────────
+//  CONFIG
+// ────────────────────────────────────────
+const GO2RTC_URL = `http://${location.hostname}:${GO2RTC_PORT}`;
+const WS_URL     = `ws://${location.host}/ws`;
+
+// ────────────────────────────────────────
+//  DOM refs
+// ────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+const els = {
+  video:       $('video'),
+  placeholder: $('video-placeholder'),
+  camBadge:    $('cam-badge'),
+  camBadgeTxt: $('cam-badge-text'),
+  badgeBle:    $('badge-ble'),
+  badgeBleTxt: $('badge-ble-text'),
+  badgeCam:    $('badge-cam'),
+  badgeCamTxt: $('badge-cam-text'),
+
+  breath:  $('val-breath'),
+  subBreath: $('sub-breath'),
+  cardBreath: $('card-breath'),
+
+  temp:    $('val-temp'),
+  cardTemp:$('card-temp'),
+
+  battery:  $('val-battery'),
+  subBatt:  $('sub-battery'),
+  battIcon: $('batt-icon'),
+  cardBatt: $('card-battery'),
+
+  status:  $('val-status'),
+  subStat: $('sub-status'),
+
+  posture:        $('val-posture'),
+  postureImg:     $('posture-img'),
+  postureLoading: $('posture-loading'),
+  cardPosture:    $('card-posture'),
+
+  pillWearing: $('pill-wearing'),
+  txtWearing:  $('txt-wearing'),
+  pillUpdate:  $('pill-update'),
+  txtUpdate:   $('txt-update'),
+
+  alertList:   $('alert-list'),
+  alertBanner: $('alert-banner'),
+  bannerText:  $('banner-text'),
+  bannerClose: $('banner-close'),
+  muteBtn:     $('mute-btn'),
+};
+
+// ────────────────────────────────────────
+//  Video player (WebRTC via go2rtc)
+// ────────────────────────────────────────
+let webrtcPc = null;
+let webrtcActive = false;
+let camShouldBeLive = false;
+
+async function startWebRTC() {
+  if (webrtcActive) return;
+  webrtcActive = true;
+
+  try {
+    const remoteStream = new MediaStream();
+
+    // Use local alias `pc` in all closures so they don't read the outer
+    // `webrtcPc` variable, which stopWebRTC() sets to null — that caused a
+    // TypeError in the state-change handler that silently killed all retries.
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    webrtcPc = pc;
+
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+
+    pc.ontrack = ev => {
+      remoteStream.addTrack(ev.track);
+      if (ev.track.kind === 'video') {
+        els.video.srcObject = remoteStream;
+        // iOS Safari requires load() after srcObject is set/changed;
+        // without it play() silently fails and the video stays black.
+        els.video.load();
+        els.video.play().catch(() => {
+          setTimeout(() => els.video.play().catch(() => {}), 400);
+        });
+        els.placeholder.style.display = 'none';
+        setCamLive(true);
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState;
+      // 'disconnected' is transient on iOS (self-recovers); restarting on it
+      // causes a 5-second black window on every iOS connectivity check.
+      // Only restart on the terminal 'failed' state.
+      if (s === 'failed') {
+        stopWebRTC();
+        setTimeout(startWebRTC, 3000);
+      }
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // 等待 ICE 收集完成（最多 3 秒）
+    await new Promise(resolve => {
+      if (pc.iceGatheringState === 'complete') return resolve();
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === 'complete') resolve();
+      };
+      setTimeout(resolve, 3000);
+    });
+
+    // Guard: stopWebRTC() may have been called while we awaited ICE
+    if (!webrtcActive || webrtcPc !== pc) return;
+
+    const resp = await fetch(`${GO2RTC_URL}/api/webrtc?src=baby`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp' },
+      body: pc.localDescription.sdp,
+    });
+    if (!resp.ok) throw new Error(`go2rtc ${resp.status}`);
+    const answerSdp = await resp.text();
+
+    if (!webrtcActive || webrtcPc !== pc) return;
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+  } catch (e) {
+    console.warn('WebRTC 连接失败:', e);
+    stopWebRTC();
+    setTimeout(startWebRTC, 5000);
+  }
+}
+
+function stopWebRTC() {
+  webrtcActive = false;
+  if (webrtcPc) { webrtcPc.close(); webrtcPc = null; }
+  els.video.srcObject = null;
+  setCamLive(false);
+}
+
+// iOS Safari kills WebRTC silently in the background.
+// On returning to foreground, force a clean reconnect so the video
+// element never shows a black/frozen frame.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && (webrtcActive || camShouldBeLive)) {
+    stopWebRTC();
+    setTimeout(() => { if (camShouldBeLive) startWebRTC(); }, 800);
+  }
+});
+
+// Watchdog: if WebRTC claims to be active but the video element has no
+// data after 12 s (readyState < HAVE_CURRENT_DATA=3), tear down and retry.
+// Catches cases where go2rtc accepted the connection but never sent frames.
+let _wdTrackTime = 0;
+setInterval(() => {
+  if (!webrtcActive) return;
+  if (els.video.readyState >= 3) { _wdTrackTime = 0; return; }   // healthy
+  if (_wdTrackTime === 0) { _wdTrackTime = Date.now(); return; }  // start timer
+  if (Date.now() - _wdTrackTime > 12000) {
+    console.warn('[WebRTC] 视频长时间无数据，重连...');
+    _wdTrackTime = 0;
+    stopWebRTC();
+    if (camShouldBeLive) setTimeout(startWebRTC, 1000);
+  }
+}, 3000);
+
+function setCamLive(live) {
+  els.placeholder.style.display = live ? 'none' : 'flex';
+  els.camBadge.className = 'cam-badge' + (live ? ' live' : '');
+  // live 时只显示红点闪烁，不显示文字
+  els.camBadgeTxt.style.display = live ? 'none' : '';
+  els.camBadgeTxt.textContent = T.offline;
+  els.badgeCam.className = 'badge' + (live ? ' ok' : ' err');
+  els.badgeCamTxt.textContent = live ? T.camOn : T.camOff;
+  els.muteBtn.className = 'mute-btn' + (live ? ' visible' : '');
+}
+
+// 静音/取消静音
+els.muteBtn.addEventListener('click', () => {
+  els.video.muted = !els.video.muted;
+  els.muteBtn.textContent = els.video.muted ? '🔇' : '🔊';
+  els.muteBtn.title = els.video.muted ? T.muteOn : T.muteOff;
+});
+
+// ────────────────────────────────────────
+//  Sensor rendering
+// ────────────────────────────────────────
+
+function renderSensor(s) {
+  // BLE status
+  const bleOk = s.ble_ok === true;
+  els.badgeBle.className = 'badge' + (bleOk ? ' ok' : ' err');
+  els.badgeBleTxt.textContent = bleOk ? T.bleOn : T.bleOff;
+  els.status.textContent = bleOk ? T.connOn : T.connOff;
+  els.status.style.color = bleOk ? 'var(--green)' : 'var(--red)';
+
+  // Camera status
+  camShouldBeLive = s.cam_ok === true;
+  if (s.cam_ok && !webrtcActive) startWebRTC();
+  if (!s.cam_ok && webrtcActive) stopWebRTC();
+
+  // Breath
+  if (s.breath_rate != null) {
+    const r = s.breath_rate;
+    const { min: bMin, max: bMax } = SENSOR_CFG.breath;
+    els.breath.textContent = r;
+    const ok = r >= bMin && r <= bMax;
+    els.breath.style.color = ok ? 'var(--text)' : 'var(--red)';
+    els.cardBreath.className = 'card sensor-card' + (ok ? '' : ' alert-card');
+    els.subBreath.textContent = ok ? T.normal : (r < bMin ? T.slow : T.fast);
+  }
+
+  // Temperature
+  if (s.temperature != null) {
+    const t = s.temperature;
+    const { min: tMin, max: tMax } = SENSOR_CFG.temp;
+    els.temp.textContent = t.toFixed(1);
+    const ok = t >= tMin && t <= tMax;
+    els.temp.style.color = ok ? 'var(--text)' : (t > tMax ? 'var(--red)' : 'var(--blue)');
+    els.cardTemp.className = 'card sensor-card' + (ok ? '' : ' warn-card');
+  }
+
+  // Battery
+  if (s.battery != null) {
+    const b = s.battery;
+    const { low, warn, ok } = SENSOR_CFG.battery;
+    els.battery.textContent = b;
+    els.battIcon.textContent = b >= ok ? '🔋' : b >= low ? '🪫' : '⚠️';
+    els.battery.style.color = b < low ? 'var(--red)' : b < warn ? 'var(--yellow)' : 'var(--text)';
+    els.cardBatt.className = 'status-pill' + (b < low ? ' err' : b < warn ? ' warn' : '');
+  }
+
+  // Posture
+  if (s.posture != null) {
+    const p = s.posture;
+    els.posture.textContent = T.postures[p] || p;
+    els.posture.style.visibility = 'visible';
+    const prone = p === '俯卧';
+    els.postureImg.src = `/static/images/${p}.png`;
+    els.postureImg.alt = p;
+    els.postureImg.style.display = '';
+    els.postureLoading.style.display = 'none';
+    els.cardPosture.className = 'card sensor-card' + (prone ? ' alert-card' : '');
+    els.posture.style.color = prone ? 'var(--red)' : 'var(--text)';
+  }
+
+  // Wearing
+  if (s.is_wearing != null) {
+    const w = s.is_wearing;
+    els.pillWearing.className = 'status-pill' + (w ? ' ok' : '');
+    els.txtWearing.textContent = w ? T.wearing : T.notWearing;
+  }
+
+  // Last update
+  if (s.last_update) {
+    els.pillUpdate.className = 'status-pill ok';
+    els.txtUpdate.textContent = `${T.updated} ${s.last_update}`;
+  }
+}
+
+// ────────────────────────────────────────
+//  Alert log
+// ────────────────────────────────────────
+let bannerTimer = null;
+
+function addAlert(entry) {
+  const item = document.createElement('div');
+  item.className = `alert-item ${entry.level || 'info'}`;
+  item.innerHTML = `<span class="alert-time">${entry.timestamp}</span><span class="alert-msg">${entry.message}</span>`;
+  els.alertList.prepend(item);
+  // keep max 50 entries
+  while (els.alertList.children.length > 50) {
+    els.alertList.removeChild(els.alertList.lastChild);
+  }
+  // danger/warning: show banner
+  if (entry.level === 'danger' || entry.level === 'warning') {
+    els.bannerText.textContent = entry.message;
+    els.alertBanner.className = 'alert-banner show';
+    clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(() => {
+      els.alertBanner.className = 'alert-banner';
+    }, 8000);
+  }
+}
+
+els.bannerClose.addEventListener('click', () => {
+  els.alertBanner.className = 'alert-banner';
+  clearTimeout(bannerTimer);
+});
+
+// ────────────────────────────────────────
+//  WebSocket
+// ────────────────────────────────────────
+let ws = null;
+let wsRetryDelay = 1000;
+
+function connectWs() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    wsRetryDelay = 1000;
+    const placeholder = $('alert-placeholder');
+    if (placeholder) placeholder.remove();
+  };
+
+  ws.onmessage = ev => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'state') {
+        renderSensor(msg.sensor || {});
+        (msg.alerts || []).forEach(a => addAlert(a));
+        if (msg.baby_stats) updateBabyStats(msg.baby_stats);
+        if (msg.birth_date) setBirthDate(msg.birth_date);
+        refreshTodayLog();
+      } else if (msg.type === 'sensor') {
+        renderSensor(msg);
+      } else if (msg.type === 'alert') {
+        addAlert(msg);
+      } else if (msg.type === 'baby_stats') {
+        updateBabyStats(msg);
+        refreshTodayLog();
+      }
+    } catch (e) {}
+  };
+
+  ws.onclose = () => {
+    els.badgeBle.className = 'badge err';
+    els.badgeBleTxt.textContent = T.svrOff;
+    setTimeout(connectWs, wsRetryDelay);
+    wsRetryDelay = Math.min(wsRetryDelay * 2, 15000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+// ────────────────────────────────────────
+//  Baby Log
+// ────────────────────────────────────────
+let babyStats = {};
+let countdownInterval = null;
+
+// ── Stats update ──────────────────────────
+function updateBabyStats(stats) {
+  babyStats = stats;
+  tickCountdown();
+  if (!countdownInterval) countdownInterval = setInterval(tickCountdown, 1000);
+
+  const lastTime = stats.last_feed_time, lastMl = stats.last_feed_ml, recMl = stats.recommended_ml;
+  const lastPart = lastTime
+    ? `${T.lastFeed} ${lastTime}${lastMl != null ? ` · ${lastMl}mL` : ''}`
+    : T.feedNone;
+  $('feed-cd-sub').textContent = lastPart + (recMl ? `  ${T.feedRecMl} ${recMl}mL` : '');
+
+  const sleeping = !!stats.sleeping_since;
+  $('btn-sleep').disabled = sleeping;
+  $('btn-wake').disabled  = !sleeping;
+}
+
+function renderDateStats(entries) {
+  const FEED_T = new Set(['formula', 'bottle_milk', 'breastfeed', 'feed']);
+  let bottleCount = 0, bottleMl = 0, bfL = 0, bfR = 0;
+  let wet = 0, dirty = 0, sleepMs = 0, sleepStart = null;
+
+  for (const e of entries) {
+    if (e.type === 'formula' || e.type === 'bottle_milk') {
+      bottleCount++; bottleMl += e.amount_ml || 0;
+    }
+    if (e.type === 'breastfeed') {
+      bfL += e.left_min  || (e.side === 'left'  ? e.duration_min || 0 : 0);
+      bfR += e.right_min || (e.side === 'right' ? e.duration_min || 0 : 0);
+    }
+    if (e.type === 'diaper') { if (e.kind === 'wet') wet++; else dirty++; }
+    if (e.type === 'sleep') {
+      if (e.action === 'start') sleepStart = e.ts;
+      else if (e.action === 'end' && sleepStart) {
+        sleepMs += (e.ts - sleepStart) * 1000; sleepStart = null;
+      }
+    }
+  }
+
+  const sh = Math.floor(sleepMs / 3600000), sm = Math.floor(sleepMs % 3600000 / 60000);
+  $('stat-bottle-feed').textContent = bottleCount ? `🍼 ${bottleCount}${T.statTimes} ${bottleMl}mL` : `🍼 0`;
+  $('stat-breast').textContent      = (bfL || bfR) ? `🤱 ${T.sideLeft}${bfL}m/${T.sideRight}${bfR}m` : `🤱 --`;
+  $('stat-diaper').textContent      = `💧${wet} 💩${dirty}`;
+  $('stat-sleep').textContent       = `😴 ${sh > 0 ? `${sh}h${sm}m` : `${sm}m`}`;
+}
+
+function tickCountdown() {
+  const el = $('feed-countdown'), nft = babyStats.next_feed_ts;
+  if (!nft) { el.textContent = '--'; el.className = 'card-value feed-countdown'; return; }
+  const totalSecs = Math.round(nft - Date.now() / 1000);
+  const abs = Math.abs(totalSecs);
+  const h = Math.floor(abs / 3600);
+  const m = Math.floor((abs % 3600) / 60);
+  const s = abs % 60;
+  const dur = h > 0
+    ? `${h}${T.cdHour}${m}${T.cdMin}${s}${T.cdSec}`
+    : `${m}${T.cdMin}${s}${T.cdSec}`;
+  if (totalSecs > 0) {
+    el.textContent = `${T.cdRemain} ${dur}`;
+    el.className = 'card-value feed-countdown' + (totalSecs <= 20 * 60 ? ' warn' : '');
+  } else {
+    el.textContent = `${T.cdOverdue} ${dur}`;
+    el.className = 'card-value feed-countdown overdue';
+  }
+}
+
+// ── API ───────────────────────────────────
+async function apiLog(entry) {
+  try {
+    // 将当前浏览日期附到请求，让后端记录到正确的日期
+    const payload = viewingDate !== _sysToday
+      ? { ...entry, date: viewingDate }
+      : entry;
+    const r = await fetch('/api/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (data.stats) updateBabyStats(data.stats);
+    refreshTodayLog();   // 刷新当前浏览日期的列表，不跳回今天
+  } catch (e) { console.warn('[BabyLog]', e); }
+}
+
+async function apiDeleteEntry(ts) {
+  try {
+    const r = await fetch(`/api/log/entry/${ts}`, { method: 'DELETE' });
+    const data = await r.json();
+    if (data.stats) updateBabyStats(data.stats);
+    refreshTodayLog();
+  } catch (e) { console.warn('[BabyLog]', e); }
+}
+
+async function apiUpdateEntry(ts, updates) {
+  try {
+    const r = await fetch(`/api/log/entry/${ts}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    const data = await r.json();
+    if (data.stats) updateBabyStats(data.stats);
+    refreshTodayLog();
+  } catch (e) { console.warn('[BabyLog]', e); }
+}
+
+// ── iOS-style drum-roll time picker ──────
+// cyclic=true: 渲染 3 倍条目，滑到边界后静默回归中段，实现无限循环
+function buildDrumCol(items, defaultIdx, cyclic) {
+  const ITEM_H = 50;
+  const n = items.length;
+  const virtual = cyclic ? [...items, ...items, ...items] : items;
+  const vLen = virtual.length;
+
+  const col = document.createElement('div');
+  col.className = 'drum-col';
+  const inner = document.createElement('div');
+  inner.className = 'drum-col-inner';
+  const hl = document.createElement('div');
+  hl.className = 'drum-highlight';
+
+  virtual.forEach(v => {
+    const el = document.createElement('div');
+    el.className = 'drum-item';
+    el.textContent = String(v).padStart(2, '0');
+    inner.appendChild(el);
+  });
+  col.appendChild(hl);
+  col.appendChild(inner);
+
+  let curIdx = cyclic ? n + defaultIdx : defaultIdx;
+  let offsetY = 0, startY = 0, startOffset = 0, dragActive = false;
+
+  function clampIdx(i) { return Math.max(0, Math.min(vLen - 1, i)); }
+  function idxToOffset(i) { return ITEM_H - i * ITEM_H; }
+
+  function highlightAt(idx) {
+    inner.querySelectorAll('.drum-item').forEach((el, i) => {
+      el.classList.toggle('selected', i === idx);
+    });
+  }
+
+  function setOffset(v, animate) {
+    if (animate) inner.style.transition = 'transform .22s cubic-bezier(.33,1,.68,1)';
+    else         inner.style.transition = 'none';
+    inner.style.transform = `translateY(${v}px)`;
+    offsetY = v;
+    curIdx = clampIdx(Math.round((ITEM_H - v) / ITEM_H));
+    highlightAt(curIdx);
+  }
+
+  function recenter() {
+    // 动画结束后静默跳回中间段（无视觉跳变）
+    if (!cyclic) return;
+    let adj = 0;
+    if (curIdx < n)       adj = +n;
+    if (curIdx >= n * 2)  adj = -n;
+    if (adj === 0) return;
+    curIdx += adj;
+    inner.style.transition = 'none';
+    inner.style.transform = `translateY(${idxToOffset(curIdx)}px)`;
+    offsetY = idxToOffset(curIdx);
+    highlightAt(curIdx);
+  }
+
+  function snapToNearest(animate) {
+    curIdx = clampIdx(Math.round((ITEM_H - offsetY) / ITEM_H));
+    setOffset(idxToOffset(curIdx), animate !== false);
+    if (cyclic) setTimeout(recenter, 240);
+  }
+
+  setOffset(idxToOffset(curIdx), false);
+
+  function onStart(clientY) {
+    dragActive = true; startY = clientY; startOffset = offsetY;
+    inner.style.transition = 'none';
+  }
+  function onMove(clientY) {
+    if (!dragActive) return;
+    const dy = clientY - startY;
+    let v = startOffset + dy;
+    // 仅在虚拟列表两端保留橡皮筋（循环模式中段不需要）
+    const minOff = idxToOffset(vLen - 1), maxOff = idxToOffset(0);
+    if (v > maxOff) v = maxOff + (v - maxOff) * 0.3;
+    if (v < minOff) v = minOff + (v - minOff) * 0.3;
+    offsetY = v;
+    inner.style.transform = `translateY(${v}px)`;
+    highlightAt(clampIdx(Math.round((ITEM_H - v) / ITEM_H)));
+  }
+  function onEnd() {
+    if (!dragActive) return;
+    dragActive = false;
+    snapToNearest(true);
+  }
+
+  col.addEventListener('touchstart', e => { e.preventDefault(); onStart(e.touches[0].clientY); }, { passive: false });
+  col.addEventListener('touchmove',  e => { e.preventDefault(); onMove(e.touches[0].clientY); },  { passive: false });
+  col.addEventListener('touchend',   () => onEnd());
+  col.addEventListener('mousedown', e => {
+    e.preventDefault(); onStart(e.clientY);
+    const mmv = ev => onMove(ev.clientY);
+    const mup = () => { onEnd(); window.removeEventListener('mousemove', mmv); window.removeEventListener('mouseup', mup); };
+    window.addEventListener('mousemove', mmv);
+    window.addEventListener('mouseup', mup);
+  });
+
+  col.getIndex = () => cyclic ? curIdx % n : curIdx;
+  return col;
+}
+
+function buildTimeCtrl(defaultTime) {
+  if (!defaultTime) {
+    const now = new Date();
+    let h = now.getHours(), m = Math.round(now.getMinutes() / 5) * 5;
+    if (m === 60) { m = 0; h = (h + 1) % 24; }
+    defaultTime = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+  }
+  const [ih, im] = defaultTime.split(':').map(Number);
+  const initMinIdx = Math.round(im / 5);   // 0..11
+
+  const hours   = Array.from({length: 24}, (_, i) => i);
+  const minutes = Array.from({length: 12}, (_, i) => i * 5);
+
+  const section = document.createElement('div');
+  section.className = 'picker-section';
+  const lbl = document.createElement('div');
+  lbl.className = 'picker-label';
+  lbl.textContent = lang === 'zh' ? '时间' : '時間';
+
+  const drum = document.createElement('div');
+  drum.className = 'drum-picker';
+  const hCol = buildDrumCol(hours,   ih,          true);
+  const colon = document.createElement('div');
+  colon.className = 'drum-colon';
+  colon.textContent = ':';
+  const mCol = buildDrumCol(minutes, initMinIdx,  true);
+
+  drum.append(hCol, colon, mCol);
+  section.append(lbl, drum);
+
+  section.getValue = () => {
+    const h = hours[hCol.getIndex()];
+    const m = minutes[mCol.getIndex()];
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+  };
+  return section;
+}
+
+// ── Unified picker ────────────────────────
+function showLogPicker(title, buildFn, defaultTime) {
+  $('log-picker-title').textContent = title;
+  const body = $('log-picker-body');
+  body.innerHTML = '';
+  const timeCtrl = buildTimeCtrl(defaultTime);
+  body.appendChild(timeCtrl);
+  buildFn(body, () => timeCtrl.getValue());
+  $('log-picker').style.display = 'flex';
+}
+
+let _pickerCleanup = null;
+function hideLogPicker() {
+  $('log-picker').style.display = 'none';
+  if (_pickerCleanup) { _pickerCleanup(); _pickerCleanup = null; }
+}
+
+// ── Picker helpers ────────────────────────
+function buildSegmented(items, defaultIdx) {
+  const wrap = document.createElement('div');
+  wrap.className = 'seg-ctrl';
+  items.forEach((item, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'seg-opt' + (i === defaultIdx ? ' active' : '');
+    btn.textContent = item.label;
+    btn.dataset.value = item.value;
+    btn.onclick = () => {
+      wrap.querySelectorAll('.seg-opt').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    };
+    wrap.appendChild(btn);
+  });
+  wrap.getValue = () => (wrap.querySelector('.seg-opt.active') || wrap.children[defaultIdx]).dataset.value;
+  return wrap;
+}
+
+function pickerSection(labelText, child) {
+  const wrap = document.createElement('div');
+  wrap.className = 'picker-section';
+  const lbl = document.createElement('div');
+  lbl.className = 'picker-label';
+  lbl.textContent = labelText;
+  wrap.appendChild(lbl);
+  wrap.appendChild(child);
+  return wrap;
+}
+
+// ── Amount picker (formula / bottle milk) ──
+// 顶部自由数字输入 + 下方快捷预设按钮（点击快捷按钮更新输入值）
+function buildAmountPicker(type, body, getTime) {
+  const recMl = babyStats.recommended_ml || null;
+  const ctrl = buildNumCtrl(recMl || 60, 0, 500, 5, 'mL');
+  body.appendChild(ctrl);
+
+  const grid = document.createElement('div');
+  grid.className = 'amount-grid';
+  FORMULA_AMOUNTS.forEach(ml => {
+    const btn = document.createElement('button');
+    const isRec = ml === recMl;
+    btn.className = 'amount-btn' + (isRec ? ' rec' : '');
+    btn.textContent = isRec ? `${ml}★` : String(ml);
+    btn.onclick = () => ctrl.setValue(ml);
+    grid.appendChild(btn);
+  });
+  body.appendChild(grid);
+
+  const confirmB = document.createElement('button');
+  confirmB.className = 'picker-confirm';
+  confirmB.textContent = T.confirm;
+  confirmB.onclick = () => { hideLogPicker(); apiLog({ type, amount_ml: ctrl.getValue(), time: getTime() }); };
+  body.appendChild(confirmB);
+}
+
+// ── Breastfeed duration picker ──────────────
+// 顶部自由分钟输入 + 下方快捷按钮
+function buildDurationPicker(side, body, getTime) {
+  const ctrl = buildNumCtrl(10, 1, 120, 1, 'min');
+  body.appendChild(ctrl);
+
+  const grid = document.createElement('div');
+  grid.className = 'amount-grid';
+  BREAST_DURATIONS.forEach(min => {
+    const btn = document.createElement('button');
+    btn.className = 'amount-btn';
+    btn.textContent = `${min}m`;
+    btn.onclick = () => ctrl.setValue(min);
+    grid.appendChild(btn);
+  });
+  body.appendChild(grid);
+
+  const confirmB = document.createElement('button');
+  confirmB.className = 'picker-confirm';
+  confirmB.textContent = T.confirm;
+  confirmB.onclick = () => { hideLogPicker(); apiLog({ type: 'breastfeed', side, duration_min: ctrl.getValue(), time: getTime() }); };
+  body.appendChild(confirmB);
+}
+
+// ── Poop detail picker ──────────────────────
+function buildPoopPicker(body, getTime) {
+  const colorState = { value: '黄' };
+
+  const amtSeg = buildSegmented([
+    { label: T.poopAmtSmall, value: '少' },
+    { label: T.poopAmtNormal, value: '正常' },
+    { label: T.poopAmtLarge, value: '多' },
+  ], 1);
+  body.appendChild(pickerSection(T.poopAmt, amtSeg));
+
+  const consSeg = buildSegmented([
+    { label: T.poopConsSoft, value: '软' },
+    { label: T.poopConsNormal, value: '正常' },
+    { label: T.poopConsHard, value: '硬' },
+  ], 1);
+  body.appendChild(pickerSection(T.poopCons, consSeg));
+
+  const colorGrid = document.createElement('div');
+  colorGrid.className = 'color-picker';
+  let activeColorBtn = null;
+  POOP_COLORS.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'color-btn' + (c.key === '黄' ? ' active' : '');
+    btn.style.background = c.hex;
+    btn.title = c.key;
+    if (c.key === '黄') activeColorBtn = btn;
+    btn.onclick = () => {
+      if (activeColorBtn) activeColorBtn.classList.remove('active');
+      btn.classList.add('active');
+      activeColorBtn = btn;
+      colorState.value = c.key;
+    };
+    colorGrid.appendChild(btn);
+  });
+  body.appendChild(pickerSection(T.poopColor, colorGrid));
+
+  const confirmB = document.createElement('button');
+  confirmB.className = 'picker-confirm';
+  confirmB.textContent = T.confirm;
+  confirmB.onclick = () => {
+    hideLogPicker();
+    apiLog({ type: 'diaper', kind: 'dirty', amount: amtSeg.getValue(), consistency: consSeg.getValue(), color: colorState.value, time: getTime() });
+  };
+  body.appendChild(confirmB);
+}
+
+// ── Shared number control widget ─────────────
+function buildNumCtrl(defaultVal, min, max, step, unit) {
+  const wrap = document.createElement('div');
+  wrap.className = 'num-ctrl';
+  const minus = document.createElement('button');
+  minus.className = 'num-btn'; minus.textContent = '−';
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.className = 'num-display';
+  inp.value = defaultVal; inp.min = min; inp.max = max; inp.step = step;
+  const unitEl = document.createElement('span');
+  unitEl.className = 'num-unit'; unitEl.textContent = unit;
+  const plus = document.createElement('button');
+  plus.className = 'num-btn'; plus.textContent = '+';
+  const dec = step < 1 ? 1 : 0;
+  minus.onclick = () => { const v = parseFloat(inp.value) - step; if (v >= min) inp.value = v.toFixed(dec); };
+  plus.onclick  = () => { const v = parseFloat(inp.value) + step; if (v <= max) inp.value = v.toFixed(dec); };
+  wrap.append(minus, inp, unitEl, plus);
+  wrap.getValue = () => parseFloat(inp.value);
+  wrap.setValue = v => { inp.value = v; };
+  return wrap;
+}
+
+// ── Number picker (temp / height / weight) ── [add mode]
+function buildNumberPicker(type, defaultVal, min, max, step, unit, body, getTime) {
+  const ctrl = buildNumCtrl(defaultVal, min, max, step, unit);
+  body.appendChild(ctrl);
+  const confirmB = document.createElement('button');
+  confirmB.className = 'picker-confirm'; confirmB.textContent = T.confirm;
+  confirmB.onclick = () => { hideLogPicker(); apiLog({ type, value: ctrl.getValue(), time: getTime() }); };
+  body.appendChild(confirmB);
+}
+
+// ── Edit-mode field builder — returns getUpdates() ──
+function buildEditFields(entry, body) {
+  switch (entry.type) {
+    case 'formula': {
+      const ctrl = buildNumCtrl(entry.amount_ml || 60, 0, 300, 10, 'mL');
+      body.appendChild(ctrl);
+      return () => ({ type: 'formula', amount_ml: ctrl.getValue() });
+    }
+    case 'bottle_milk': {
+      const ctrl = buildNumCtrl(entry.amount_ml || 60, 0, 300, 10, 'mL');
+      body.appendChild(ctrl);
+      return () => ({ type: 'bottle_milk', amount_ml: ctrl.getValue() });
+    }
+    case 'breastfeed': {
+      const sideItems = [{ label: '左乳', value: 'left' }, { label: '右乳', value: 'right' }];
+      const defaultSideIdx = entry.side === 'right' ? 1 : 0;
+      const sideSeg = buildSegmented(sideItems, defaultSideIdx);
+      body.appendChild(pickerSection('侧', sideSeg));
+      const defaultDur = entry.duration_min || (entry.side === 'left' ? entry.left_min : entry.right_min) || 5;
+      const ctrl = buildNumCtrl(defaultDur, 1, 60, 1, 'min');
+      body.appendChild(pickerSection('时间', ctrl));
+      return () => ({ type: 'breastfeed', side: sideSeg.getValue(), duration_min: ctrl.getValue() });
+    }
+    case 'diaper': {
+      if (entry.kind === 'wet') {
+        const info = document.createElement('div');
+        info.style.cssText = 'text-align:center;color:var(--muted);padding:8px;font-size:0.85rem';
+        info.textContent = '💧 尿尿';
+        body.appendChild(info);
+        return () => ({ type: 'diaper', kind: 'wet' });
+      } else {
+        const amtItems = [
+          { label: T.poopAmtSmall, value: '少' }, { label: T.poopAmtNormal, value: '正常' }, { label: T.poopAmtLarge, value: '多' },
+        ];
+        const amtSeg = buildSegmented(amtItems, Math.max(0, amtItems.findIndex(x => x.value === (entry.amount || '正常'))));
+        body.appendChild(pickerSection(T.poopAmt, amtSeg));
+        const consItems = [
+          { label: T.poopConsSoft, value: '软' }, { label: T.poopConsNormal, value: '正常' }, { label: T.poopConsHard, value: '硬' },
+        ];
+        const consSeg = buildSegmented(consItems, Math.max(0, consItems.findIndex(x => x.value === (entry.consistency || '正常'))));
+        body.appendChild(pickerSection(T.poopCons, consSeg));
+        const colorState = { value: entry.color || '黄' };
+        const colorGrid = document.createElement('div'); colorGrid.className = 'color-picker';
+        let activeColorBtn = null;
+        POOP_COLORS.forEach(c => {
+          const btn = document.createElement('button');
+          const isActive = c.key === colorState.value;
+          btn.className = 'color-btn' + (isActive ? ' active' : '');
+          btn.style.background = c.hex; btn.title = c.key;
+          if (isActive) activeColorBtn = btn;
+          btn.onclick = () => {
+            if (activeColorBtn) activeColorBtn.classList.remove('active');
+            btn.classList.add('active'); activeColorBtn = btn; colorState.value = c.key;
+          };
+          colorGrid.appendChild(btn);
+        });
+        body.appendChild(pickerSection(T.poopColor, colorGrid));
+        return () => ({ type: 'diaper', kind: 'dirty', amount: amtSeg.getValue(), consistency: consSeg.getValue(), color: colorState.value });
+      }
+    }
+    case 'temperature': {
+      const ctrl = buildNumCtrl(entry.value || 37.0, 35, 42, 0.1, '°C');
+      body.appendChild(ctrl);
+      return () => ({ type: 'temperature', value: ctrl.getValue() });
+    }
+    case 'height': {
+      const ctrl = buildNumCtrl(entry.value || 50, 30, 100, 0.5, 'cm');
+      body.appendChild(ctrl);
+      return () => ({ type: 'height', value: ctrl.getValue() });
+    }
+    case 'weight': {
+      const ctrl = buildNumCtrl(entry.value || 3000, 1000, 15000, 10, 'g');
+      body.appendChild(ctrl);
+      return () => ({ type: 'weight', value: ctrl.getValue() });
+    }
+    default: {
+      const [icon, desc] = fmtEntry(entry);
+      const info = document.createElement('div');
+      info.style.cssText = 'text-align:center;color:var(--muted);padding:8px;font-size:0.85rem';
+      info.textContent = `${icon} ${desc}`;
+      body.appendChild(info);
+      return () => ({ type: entry.type, action: entry.action });
+    }
+  }
+}
+
+// ── Edit picker (click on today-entry) ────────
+function showEditPicker(entry) {
+  const [icon] = fmtEntry(entry);
+  showLogPicker(`${icon} ${entry.time || '--'} 修改`, (body, getTime) => {
+    const getUpdates = buildEditFields(entry, body);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'picker-confirm';
+    saveBtn.textContent = '保存修改';
+    saveBtn.onclick = () => {
+      hideLogPicker();
+      apiUpdateEntry(entry.ts, { ...getUpdates(), time: getTime() });
+    };
+    body.appendChild(saveBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'picker-delete';
+    delBtn.textContent = '🗑️ 删除记录';
+    delBtn.onclick = () => {
+      if (confirm('确认删除这条记录？')) { hideLogPicker(); apiDeleteEntry(entry.ts); }
+    };
+    body.appendChild(delBtn);
+  }, entry.time);
+}
+
+// ── Event listeners ───────────────────────
+function simpleConfirmPicker(entry) {
+  return (b, gt) => {
+    const btn = document.createElement('button');
+    btn.className = 'picker-confirm'; btn.textContent = T.confirm;
+    btn.onclick = () => { hideLogPicker(); apiLog({ ...entry, time: gt() }); };
+    b.appendChild(btn);
+  };
+}
+
+$('btn-formula').addEventListener('click',  () => showLogPicker(T.selectFormula,  (b, gt) => buildAmountPicker('formula', b, gt)));
+$('btn-breast-l').addEventListener('click', () => showLogPicker(T.selectBreastL,  (b, gt) => buildDurationPicker('left', b, gt)));
+$('btn-breast-r').addEventListener('click', () => showLogPicker(T.selectBreastR,  (b, gt) => buildDurationPicker('right', b, gt)));
+$('btn-bottle').addEventListener('click',   () => showLogPicker(T.selectBottle,   (b, gt) => buildAmountPicker('bottle_milk', b, gt)));
+$('btn-sleep').addEventListener('click',    () => showLogPicker(T.btnSleep,   simpleConfirmPicker({ type: 'sleep',  action: 'start' })));
+$('btn-wake').addEventListener('click', () => {
+  showLogPicker(T.btnWake, (body, getTime) => {
+    const sleepingSince = babyStats.sleeping_since; // unix ts of last sleep start
+
+    // duration display
+    const sec = document.createElement('div');
+    sec.className = 'picker-section';
+    const lbl = document.createElement('div');
+    lbl.className = 'picker-label';
+    lbl.textContent = lang === 'zh' ? '睡眠时长' : '睡眠時間';
+    const val = document.createElement('div');
+    val.style.cssText = 'text-align:center;font-size:1.35rem;font-weight:700;color:var(--text);padding:4px 0 2px';
+    sec.append(lbl, val);
+    body.appendChild(sec);
+
+    function calcDur() {
+      if (!sleepingSince) { val.textContent = '--'; return; }
+      const [wh, wm] = getTime().split(':').map(Number);
+      const now = new Date();
+      const wakeTs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), wh, wm).getTime() / 1000;
+      const diffS = wakeTs - sleepingSince;
+      if (diffS <= 0) { val.textContent = '--'; return; }
+      const h = Math.floor(diffS / 3600), m = Math.floor((diffS % 3600) / 60);
+      val.textContent = h > 0 ? `${h}時間${m}分` : `${m}分`;
+    }
+    calcDur();
+    const iv = setInterval(calcDur, 500);
+    _pickerCleanup = () => clearInterval(iv);
+
+    const btn = document.createElement('button');
+    btn.className = 'picker-confirm'; btn.textContent = T.confirm;
+    btn.onclick = () => { hideLogPicker(); apiLog({ type: 'sleep', action: 'end', time: getTime() }); };
+    body.appendChild(btn);
+  });
+});
+$('btn-wet').addEventListener('click',      () => showLogPicker(T.btnWet,     simpleConfirmPicker({ type: 'diaper', kind:   'wet'   })));
+$('btn-dirty').addEventListener('click',    () => showLogPicker(T.poopTitle,  (b, gt) => buildPoopPicker(b, gt)));
+$('btn-temp').addEventListener('click',     () => showLogPicker(T.tempTitle,   (b, gt) => buildNumberPicker('temperature', 37.0, 35.0, 42.0, 0.1, '°C', b, gt)));
+$('btn-height').addEventListener('click',   () => showLogPicker(T.heightTitle, (b, gt) => buildNumberPicker('height', 50, 30, 100, 0.5, 'cm', b, gt)));
+$('btn-weight').addEventListener('click',   () => showLogPicker(T.weightTitle, (b, gt) => buildNumberPicker('weight', 3000, 1000, 15000, 10, 'g', b, gt)));
+$('btn-bath').addEventListener('click',     () => showLogPicker(T.btnBath,    simpleConfirmPicker({ type: 'bath' })));
+$('btn-pump').addEventListener('click',     () => showLogPicker(T.selectPump, (b, gt) => buildAmountPicker('pump', b, gt)));
+$('log-picker-cancel').addEventListener('click', hideLogPicker);
+$('log-picker').addEventListener('click', e => { if (e.target === $('log-picker')) hideLogPicker(); });
+
+// ── Log tab switching ─────────────────────
+(function initLogTabs() {
+  const tabs   = document.querySelectorAll('.log-tab');
+  const panels = document.querySelectorAll('.log-tab-panel');
+  function activate(tabId) {
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
+    panels.forEach(p => p.classList.toggle('active', p.id === `tabp-${tabId}`));
+    localStorage.setItem('logTab', tabId);
+  }
+  tabs.forEach(t => t.addEventListener('click', () => activate(t.dataset.tab)));
+  activate(localStorage.getItem('logTab') || 'feed');
+})();
+
+// ── Today log list (date-aware) ───────────
+function _localDateStr(d) {
+  // Returns YYYY-MM-DD in LOCAL time (avoids UTC-shift for UTC+8/+9 users)
+  d = d || new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+let viewingDate = _localDateStr();
+let _sysToday   = viewingDate;
+
+function _fmtNavDate(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const label = `${d.getMonth() + 1}月${d.getDate()}日`;
+  if (dateStr === _sysToday)
+    return `${label}<span class="log-today-tag">${lang === 'zh' ? '今日' : '今日'}</span>`;
+  return label;
+}
+
+function updateDateNav() {
+  const el = $('log-date-nav-label');
+  if (el) el.innerHTML = _fmtNavDate(viewingDate);
+  const next = $('log-date-next'), prev = $('log-date-prev');
+  if (next) next.disabled = viewingDate >= _sysToday;
+  if (prev) prev.disabled = false;
+}
+
+function shiftViewDate(days) {
+  const d = new Date(viewingDate + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  const s = _localDateStr(d);
+  if (s > _sysToday) return;
+  viewingDate = s;
+  updateDateNav();
+  refreshTodayLog();
+}
+
+// 触摸状态追踪：触摸中不做程序性滚动，避免与 iOS 惯性滚动冲突
+let _listTouching = false;
+(function() {
+  const el = document.getElementById('today-log-list');
+  if (!el) return;
+  el.addEventListener('touchstart', () => { _listTouching = true;  }, { passive: true });
+  el.addEventListener('touchend',   () => { setTimeout(() => { _listTouching = false; }, 200); }, { passive: true });
+})();
+
+// 防抖：连续触发时只执行最后一次，避免多次并发 fetch 互相覆盖
+let _refreshTimer = null;
+function refreshTodayLog() {
+  clearTimeout(_refreshTimer);
+  _refreshTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/log/date/${viewingDate}`);
+      renderTodayLog(await r.json());
+    } catch (_) {}
+  }, 60);
+}
+
+function renderTodayLog(entries) {
+  const list = $('today-log-list');
+
+  // 在 DOM 修改前捕获滚动位置，innerHTML='' 会同步重置 scrollTop
+  const atBottom = list.scrollHeight <= list.clientHeight + 1 ||
+                   list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
+
+  renderDateStats(entries || []);
+  if (!entries || !entries.length) {
+    list.innerHTML = `<div style="text-align:center;color:var(--muted);font-size:0.8rem;padding:12px">${lang === 'zh' ? '暂无记录' : '記録なし'}</div>`;
+    return;
+  }
+
+  // 用 DocumentFragment 批量构建后一次性插入，减少重排次数
+  const frag = document.createDocumentFragment();
+  const sorted = [...entries].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  sorted.forEach(entry => {
+    const [icon, desc] = fmtEntry(entry);
+    const div = document.createElement('div');
+    div.className = 'today-entry';
+    div.innerHTML =
+      `<div class="today-entry-time">${entry.time || '--'}</div>` +
+      `<div class="today-entry-icon">${icon}</div>` +
+      `<div class="today-entry-body">${typeof desc === 'string' ? desc.replace(/<[^>]*>/g, '') : desc}</div>`;
+    div.addEventListener('click', () => showEditPicker(entry));
+    frag.appendChild(div);
+  });
+
+  list.innerHTML = '';       // scrollTop → 0（内存中，尚未绘制）
+  list.appendChild(frag);    // DOM 重建完毕
+
+  // 与 innerHTML='' 在同一 JS 任务内同步赋值，浏览器只绘制最终状态，不会闪烁
+  // 触摸中跳过：iOS 惯性滚动仍在运行，此时强制滚动会造成抖动
+  if (viewingDate === _sysToday && atBottom && !_listTouching) {
+    list.scrollTop = list.scrollHeight;
+  }
+}
+
+// ── Date nav init & midnight check ───────
+$('log-date-prev').addEventListener('click', () => shiftViewDate(-1));
+$('log-date-next').addEventListener('click', () => shiftViewDate(+1));
+updateDateNav();
+
+setInterval(() => {
+  const now = _localDateStr();
+  if (now !== _sysToday) {
+    const wasViewingToday = viewingDate === _sysToday;
+    _sysToday = now;
+    if (wasViewingToday) viewingDate = now;
+    updateDateNav();
+    if (wasViewingToday) refreshTodayLog();
+  }
+}, 60000);
+
+// ────────────────────────────────────────
+//  Log Timeline View
+// ────────────────────────────────────────
+let birthDate  = null;
+
+// Store birth_date from initial WS state
+function setBirthDate(s) { birthDate = s || null; }
+
+function parseBirthJs(s) {
+  if (!s) return null;
+  if (s.length === 8) return new Date(+s.slice(0,4), +s.slice(4,6)-1, +s.slice(6,8));
+  return new Date(s + 'T00:00:00');
+}
+
+function ageAtDate(dateStr) {
+  const bd = parseBirthJs(birthDate);
+  if (!bd) return '';
+  const d    = new Date(dateStr + 'T00:00:00');
+  const days = Math.floor((d - bd) / 86400000);
+  if (days < 0) return '';
+  const mo = Math.floor(days / 30), rem = days % 30;
+  return lang === 'zh'
+    ? (mo > 0 ? `${mo}个月${rem}天` : `${days}天`)
+    : (mo > 0 ? `${mo}ヶ月${rem}日` : `${days}日`);
+}
+
+function fmtDateTitle(dateStr) {
+  const d    = new Date(dateStr + 'T00:00:00');
+  const wday = ['日','一','二','三','四','五','六'];
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 周${wday[d.getDay()]}`;
+}
+
+// Format a single entry → [icon, descHtml]
+function fmtEntry(e) {
+  switch (e.type) {
+    case 'formula':
+      return ['🍼', `${T.entryFormula} ${e.amount_ml}mL`];
+    case 'bottle_milk':
+      return ['🍶', `${T.entryBottle} ${e.amount_ml}mL`];
+    case 'breastfeed': {
+      let d = '';
+      if (e.side === 'both') {
+        if (e.left_min)  d += `${T.sideLeft}${e.left_min}m`;
+        if (e.right_min) d += (d ? ' / ' : '') + `${T.sideRight}${e.right_min}m`;
+      } else if (e.side === 'left')  d = `${T.sideLeft}${e.duration_min}m`;
+      else if (e.side === 'right')   d = `${T.sideRight}${e.duration_min}m`;
+      if (e.amount_ml) d += ` (${e.amount_ml}mL)`;
+      return ['🤱', `${T.entryBreast}${d ? ' ' + d : ''}`];
+    }
+    case 'sleep':
+      if (e.action === 'start') return ['😴', T.entrySleep];
+      return ['☀️', `${T.entryWake}${e.duration_str ? ` (${e.duration_str})` : ''}`];
+    case 'diaper':
+      if (e.kind === 'wet') return ['💧', T.entryWet];
+      {
+        const d2 = [e.amount, e.consistency, e.color].filter(Boolean).join('/');
+        return ['💩', `${T.entryPoop}${d2 ? ` (${d2})` : ''}`];
+      }
+    case 'temperature': return ['🌡️', `${T.entryTemp} ${e.value}°C`];
+    case 'height':      return ['📏', `${T.entryHeight} ${e.value}cm`];
+    case 'weight':      return ['⚖️', `${T.entryWeight} ${e.value}g`];
+    case 'bath':        return ['🛁', T.entryBath];
+    case 'pump':        return ['🍶', `${T.entryPump} ${e.amount_ml}mL`];
+    case 'note':        return ['📝', `<span class="tl-note">${e.text || ''}</span>`];
+    default:            return ['·', e.type];
+  }
+}
+
+
+// ────────────────────────────────────────
+//  Clock
+// ────────────────────────────────────────
+function tickClock() {
+  $('clock').textContent = new Date().toTimeString().slice(0, 8);
+}
+tickClock();
+setInterval(tickClock, 1000);
+
+// ────────────────────────────────────────
+//  Init
+// ────────────────────────────────────────
+applyI18n();
+els.muteBtn.title = T.muteOn;   // 初始静音状态的提示
+connectWs();
+(function() {
+  const mgr = `http://${location.hostname}:__MANAGER_PORT__`;
+  ['nav-manager','tab-manager'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.href = mgr;
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BabySentinel – 録画再生</title>
+<style>
+:root {
+  --bg:      #0f1117;
+  --surface: #1a1d27;
+  --border:  #2a2d3a;
+  --text:    #e8eaf0;
+  --muted:   #6b7280;
+  --green:   #22c55e;
+  --blue:    #3b82f6;
+  --yellow:  #f59e0b;
+  --red:     #ef4444;
+  --radius:  10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+
+/* ── Header ── */
+header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; background: var(--surface);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.back-btn {
+  background: none; border: 1px solid var(--border); color: var(--text);
+  padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+}
+.back-btn:hover { background: var(--border); }
+header h1 { font-size: 1rem; font-weight: 600; flex: 1; }
+.date-select {
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  padding: 5px 10px; border-radius: 6px; font-size: 0.85rem; cursor: pointer;
+}
+
+/* ── Layout ── */
+.content { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow: hidden; }
+
+/* ── Video ── */
+.video-wrap {
+  position: relative; background: #000; border-radius: var(--radius);
+  overflow: hidden; flex-shrink: 0;
+  aspect-ratio: 16/9; max-height: 52vh;
+  width: 100%;
+}
+video { width: 100%; height: 100%; display: block; object-fit: contain; }
+.video-placeholder {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; color: var(--muted); font-size: 0.9rem;
+}
+
+/* ── Sensor overlay ── */
+.sensor-bar {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,.75));
+  padding: 20px 14px 10px;
+  display: flex; gap: 16px; flex-wrap: wrap; pointer-events: none;
+}
+.s-item { font-size: 0.78rem; color: #e8eaf0; white-space: nowrap; }
+.s-item .val { font-weight: 600; color: #fff; }
+/* 左上角时间码，仿安防摄像头风格 */
+.s-time {
+  position: absolute; top: 8px; left: 10px;
+  font-size: 0.82rem; font-family: 'Courier New', monospace;
+  color: #fff; text-shadow: 0 0 4px rgba(0,0,0,.9);
+  letter-spacing: 0.5px; pointer-events: none;
+}
+.s-time .tc-date { font-size: 0.7rem; opacity: .75; display: block; }
+.s-time .tc-time { font-weight: 700; }
+
+/* ── Timeline ── */
+.timeline-wrap {
+  background: var(--surface); border-radius: var(--radius);
+  border: 1px solid var(--border); padding: 10px 12px; flex-shrink: 0;
+}
+.timeline-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 8px; }
+.timeline-track {
+  display: flex; gap: 3px; flex-wrap: wrap; max-height: 72px; overflow-y: auto;
+}
+.seg-block {
+  width: 36px; height: 28px; border-radius: 4px; background: var(--border);
+  border: 1px solid transparent; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; font-size: 0.6rem; color: var(--muted);
+  transition: background .15s;
+}
+.seg-block:hover { background: var(--blue); color: #fff; }
+.seg-block.active { background: var(--blue); color: #fff; border-color: #60a5fa; }
+
+/* ── Sensor panel ── */
+.sensor-panel {
+  background: var(--surface); border-radius: var(--radius);
+  border: 1px solid var(--border); padding: 10px 14px;
+  display: flex; gap: 20px; flex-wrap: wrap; flex-shrink: 0;
+}
+.sp-item { display: flex; flex-direction: column; gap: 2px; }
+.sp-label { font-size: 0.7rem; color: var(--muted); }
+.sp-value { font-size: 1rem; font-weight: 600; }
+.sp-value.warn { color: var(--yellow); }
+.sp-value.danger { color: var(--red); }
+
+/* ── Empty state ── */
+.empty { text-align: center; color: var(--muted); padding: 40px; font-size: 0.9rem; }
+
+@media (min-width: 700px) {
+  .content { flex-direction: row; flex-wrap: wrap; }
+  .video-wrap { flex: 2; min-width: 0; aspect-ratio: 16/9; max-height: none; }
+  .right-col { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 12px; }
+  .timeline-wrap { flex-basis: 100%; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <button class="back-btn" onclick="location.href='/'">← 戻る</button>
+  <h1>📹 録画再生</h1>
+  <select class="date-select" id="date-sel" onchange="loadDate(this.value)">
+    <option value="">日付を選択...</option>
+  </select>
+</header>
+
+<div class="content" id="content">
+  <div class="empty" id="empty-msg">日付を選択してください</div>
+</div>
+
+<template id="tpl-player">
+  <div class="video-wrap" id="video-wrap">
+    <video id="vid" preload="auto" controls></video>
+    <div class="video-placeholder" id="vid-placeholder">片段を選択してください</div>
+    <div class="sensor-bar" id="sensor-bar" style="display:none">
+      <div class="s-item">💨 呼吸 <span class="val" id="sb-breath">--</span> 回/分</div>
+      <div class="s-item">🌡️ <span class="val" id="sb-temp">--</span> °C</div>
+      <div class="s-item">🛏️ <span class="val" id="sb-posture">--</span></div>
+      <div class="s-item">🔋 <span class="val" id="sb-battery">--</span>%</div>
+      <div class="s-item">👶 <span class="val" id="sb-wear">--</span></div>
+      <div class="s-time" id="sb-time">
+        <span class="tc-date" id="sb-date"></span>
+        <span class="tc-time" id="sb-clock">--:--:--</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="right-col">
+    <div class="sensor-panel">
+      <div class="sp-item"><div class="sp-label">💨 呼吸数</div><div class="sp-value" id="sp-breath">--</div></div>
+      <div class="sp-item"><div class="sp-label">🌡️ 衣内温度</div><div class="sp-value" id="sp-temp">--</div></div>
+      <div class="sp-item"><div class="sp-label">🛏️ 姿勢</div><div class="sp-value" id="sp-posture">--</div></div>
+      <div class="sp-item"><div class="sp-label">🔋 バッテリー</div><div class="sp-value" id="sp-battery">--</div></div>
+      <div class="sp-item"><div class="sp-label">👶 装着</div><div class="sp-value" id="sp-wear">--</div></div>
+      <div class="sp-item"><div class="sp-label">🎬 映像時刻</div><div class="sp-value" id="sp-vidts" style="font-size:.8rem;font-family:monospace">--</div></div>
+      <div class="sp-item"><div class="sp-label">📡 センサー記録</div><div class="sp-value" id="sp-ts" style="font-size:.8rem;font-family:monospace;color:var(--muted)">--</div></div>
+    </div>
+    <div class="timeline-wrap">
+      <div class="timeline-label">映像タイムライン（クリックで再生）</div>
+      <div class="timeline-track" id="timeline"></div>
+    </div>
+  </div>
+</template>
+
+<script>
+const $ = id => document.getElementById(id);
+
+let _segments = [];
+let _sensors  = [];
+let _curIdx   = -1;
+
+// ── 时间戳格式化 ──────────────────────────────────────────────────────
+function fmtTs(unixTs) {
+  const d = new Date(unixTs * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+function fmtDate(unixTs) {
+  const d = new Date(unixTs * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+// ── 更新视频时间码（与传感器数据无关，始终可用）──────────────────────
+function setTimecode(realTs) {
+  if ($('sb-date'))  $('sb-date').textContent  = fmtDate(realTs);
+  if ($('sb-clock')) $('sb-clock').textContent = fmtTs(realTs);
+  if ($('sp-vidts')) $('sp-vidts').textContent = fmtTs(realTs);
+}
+
+// ── Binary search: nearest sensor entry to ts ──────────────────────────
+function nearestSensor(ts) {
+  if (!_sensors.length) return null;
+  let lo = 0, hi = _sensors.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (_sensors[mid].ts < ts) lo = mid + 1; else hi = mid;
+  }
+  if (lo > 0 && Math.abs(_sensors[lo-1].ts - ts) < Math.abs(_sensors[lo].ts - ts)) lo--;
+  return _sensors[lo];
+}
+
+// ── Posture translation ────────────────────────────────────────────────
+const POSTURE = {'仰卧':'仰向け','俯卧':'うつ伏せ','左侧卧':'左向き','右侧卧':'右向き'};
+function fmtPosture(p) { return POSTURE[p] || p || '--'; }
+
+// ── Render sensor fields ───────────────────────────────────────────────
+function renderSensor(s) {
+  if (!s) return;
+
+  const breath  = s.breath_rate != null ? s.breath_rate + ' 回/分' : '--';
+  const temp    = s.temperature != null ? s.temperature + ' °C'    : '--';
+  const posture = fmtPosture(s.posture);
+  const battery = s.battery    != null ? s.battery + '%'           : '--';
+  const wear    = s.is_wearing  != null ? (s.is_wearing ? '装着中' : '未装着') : '--';
+
+  // overlay（sb-time / sb-clock 由 setTimecode 管理，此处不覆盖）
+  if ($('sb-breath'))  $('sb-breath').textContent  = s.breath_rate ?? '--';
+  if ($('sb-temp'))    $('sb-temp').textContent     = s.temperature ?? '--';
+  if ($('sb-posture')) $('sb-posture').textContent  = posture;
+  if ($('sb-battery')) $('sb-battery').textContent  = s.battery     ?? '--';
+  if ($('sb-wear'))    $('sb-wear').textContent      = wear;
+
+  // panel
+  if ($('sp-breath'))  $('sp-breath').textContent   = breath;
+  if ($('sp-temp'))    $('sp-temp').textContent      = temp;
+  if ($('sp-posture')) $('sp-posture').textContent   = posture;
+  if ($('sp-battery')) $('sp-battery').textContent   = battery;
+  if ($('sp-wear'))    $('sp-wear').textContent       = wear;
+  // sp-ts 显示传感器记录时刻，与视频时刻分开展示
+  if ($('sp-ts'))      $('sp-ts').textContent        = s.time ? `@${s.time}` : '--';
+
+  // color hints
+  if ($('sp-posture')) $('sp-posture').className = 'sp-value' + (s.posture === '俯卧' ? ' danger' : '');
+  if ($('sp-breath')) {
+    const r = s.breath_rate;
+    $('sp-breath').className = 'sp-value' + (r != null && (r < 10 || r > 60) ? ' warn' : '');
+  }
+}
+
+// ── Play segment by index ──────────────────────────────────────────────
+function playSeg(idx) {
+  if (idx < 0 || idx >= _segments.length) return;
+  _curIdx = idx;
+  const seg = _segments[idx];
+  const vid = $('vid');
+
+  // update timeline highlight
+  document.querySelectorAll('.seg-block').forEach((b, i) => {
+    b.classList.toggle('active', i === idx);
+    if (i === idx) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
+
+  $('vid-placeholder').style.display = 'none';
+  $('sensor-bar').style.display      = 'flex';
+  vid.src = seg.url;
+  vid.load();
+  vid.play().catch(() => {});
+
+  // 立即显示片段起始时间码（不依赖传感器数据）
+  setTimecode(seg.ts);
+  renderSensor(nearestSensor(seg.ts));
+}
+
+// ── Video timeupdate → 时间码 + 同步传感器 ────────────────────────────
+function onTimeUpdate() {
+  if (_curIdx < 0) return;
+  const seg    = _segments[_curIdx];
+  const realTs = seg.ts + Math.floor(this.currentTime);
+
+  // 始终更新时间码（即使无传感器数据也能正常显示）
+  setTimecode(realTs);
+  renderSensor(nearestSensor(realTs));
+}
+
+// ── Load date ─────────────────────────────────────────────────────────
+async function loadDate(date) {
+  if (!date) return;
+  _segments = [];
+  _sensors  = [];
+  _curIdx   = -1;
+
+  const content = $('content');
+  content.innerHTML = '';
+
+  // Inject player template
+  const tpl = document.getElementById('tpl-player');
+  content.appendChild(tpl.content.cloneNode(true));
+
+  $('vid').addEventListener('timeupdate', onTimeUpdate);
+  $('vid').addEventListener('ended', function() {
+    if (_curIdx < _segments.length - 1) playSeg(_curIdx + 1);
+  });
+
+  try {
+    const [segsRes, sensRes] = await Promise.all([
+      fetch(`/api/recordings/${date}/segments`),
+      fetch(`/api/recordings/${date}/sensors`),
+    ]);
+    _segments = await segsRes.json();
+    _sensors  = await sensRes.json();
+  } catch(e) {
+    content.innerHTML = `<div class="empty">データの読み込みに失敗しました</div>`;
+    return;
+  }
+
+  // Build timeline
+  const track = $('timeline');
+  if (!_segments.length) {
+    track.innerHTML = '<span style="color:var(--muted);font-size:.8rem">映像なし</span>';
+  } else {
+    _segments.forEach((seg, i) => {
+      const b  = document.createElement('div');
+      b.className = 'seg-block';
+      b.title     = seg.file.replace('.mp4', '');
+      b.textContent = seg.file.slice(0, 5); // HH-MM
+      b.onclick = () => playSeg(i);
+      track.appendChild(b);
+    });
+    // Auto-play first segment
+    playSeg(0);
+  }
+}
+
+// ── Init: load date list ───────────────────────────────────────────────
+(async () => {
+  try {
+    const dates = await (await fetch('/api/recordings')).json();
+    const sel = $('date-sel');
+    dates.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d; opt.textContent = d;
+      sel.appendChild(opt);
+    });
+    if (dates.length) {
+      sel.value = dates[0];
+      loadDate(dates[0]);
+    }
+  } catch(e) {}
+})();
+</script>
+</body>
+</html>
