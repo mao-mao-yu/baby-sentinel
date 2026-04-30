@@ -174,15 +174,12 @@ async def get_log_stats():
 
 @app.get("/api/log/dates")
 async def get_log_dates():
-    data = baby_log._load()
-    return JSONResponse(sorted(data.keys(), reverse=True))
+    return JSONResponse(baby_log.list_dates())
 
 
 @app.get("/api/log/date/{date_str}")
 async def get_log_date(date_str: str):
-    data = baby_log._load()
-    entries = sorted(data.get(date_str, []), key=lambda e: e.get("ts", 0))
-    return JSONResponse(entries)
+    return JSONResponse(baby_log.get_date_entries(date_str))
 
 
 @app.get("/api/sensor")

@@ -1,36 +1,192 @@
-"""育儿日志模块 — 喂奶 / 尿布 / 睡眠 / 体温 / 身高体重 记录 + 统计"""
+"""育儿日志模块 — 喂奶 / 尿布 / 睡眠 / 体温 / 身高体重 记录 + 统计
+
+存储后端：SQLite (logs/baby_log.db)
+向前兼容：模块加载时自动从旧 logs/baby_log.json 迁入，原文件备份为 .bak
+"""
 
 import json
 import os
+import sqlite3
+import threading
 import time
 from datetime import date, datetime, timedelta
 
 from app.config import BASE_DIR, CFG, log
 
-LOG_FILE = os.path.join(BASE_DIR, "logs", "baby_log.json")
+LOG_DIR   = os.path.join(BASE_DIR, "logs")
+DB_FILE   = os.path.join(LOG_DIR, "baby_log.db")
+JSON_FILE = os.path.join(LOG_DIR, "baby_log.json")  # 旧文件，迁移后改名为 .bak
 
 # 所有喂奶类型（含旧的 "feed" 兼容）
 FEED_TYPES = {"feed", "formula", "breastfeed", "bottle_milk"}
 
+# 独立列对应的字段；其余字段塞进 payload JSON
+_CORE_FIELDS = {"ts", "date", "type", "time", "action"}
 
-def _today() -> str:
-    return date.today().isoformat()
+_db_lock = threading.Lock()
 
+
+# ── SQLite 连接 / Schema ──────────────────────────────────────────────
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_db() -> None:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    with _connect() as conn:
+        # WAL 模式：读写并发更友好（写入元信息一次永久生效）
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS entries (
+                ts          INTEGER PRIMARY KEY,
+                date        TEXT    NOT NULL,
+                type        TEXT    NOT NULL,
+                time        TEXT    NOT NULL,
+                action      TEXT,
+                payload     TEXT,
+                created_at  INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
+            );
+            CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
+            CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(type);
+        """)
+        conn.commit()
+
+
+# ── 行 ↔ dict 转换 ───────────────────────────────────────────────────
+
+def _row_to_entry(row: sqlite3.Row) -> dict:
+    payload = json.loads(row["payload"]) if row["payload"] else {}
+    out: dict = {"ts": row["ts"], "type": row["type"], "time": row["time"]}
+    if row["action"]:
+        out["action"] = row["action"]
+    out.update(payload)
+    return out
+
+
+def _entry_to_row(entry: dict, date_key: str) -> tuple:
+    payload = {k: v for k, v in entry.items() if k not in _CORE_FIELDS}
+    return (
+        int(entry["ts"]),
+        date_key,
+        entry["type"],
+        entry.get("time", ""),
+        entry.get("action"),
+        json.dumps(payload, ensure_ascii=False) if payload else None,
+    )
+
+
+# ── JSON → SQLite 一次性迁移 ──────────────────────────────────────────
+
+def _migrate_from_json() -> None:
+    if not os.path.exists(JSON_FILE):
+        return
+    with _connect() as conn:
+        existing = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+    if existing > 0:
+        return  # DB 已有数据，不再覆盖
+
+    try:
+        with open(JSON_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        log.warning(f"[BabyLog] 读取旧 JSON 失败，跳过迁移: {e}")
+        return
+
+    # 旧数据可能存在 ts 重复（历史 bug），迁移时按 add_entry 的规则 +1 去重
+    rows: list = []
+    used_ts: set = set()
+    bumped = 0
+    for date_key, entries in (data or {}).items():
+        if not isinstance(entries, list):
+            continue
+        for e in entries:
+            try:
+                ts = int(e.get("ts", 0))
+                while ts in used_ts:
+                    ts += 1
+                    bumped += 1
+                used_ts.add(ts)
+                e_copy = {**e, "ts": ts}
+                rows.append(_entry_to_row(e_copy, date_key))
+            except Exception as ex:
+                log.warning(f"[BabyLog] 跳过损坏条目: {e} ({ex})")
+
+    if not rows:
+        return
+
+    with _db_lock, _connect() as conn:
+        conn.executemany(
+            "INSERT INTO entries (ts, date, type, time, action, payload) VALUES (?,?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+
+    suffix = f"（{bumped} 条因 ts 重复已自动 +1 去重）" if bumped else ""
+    backup = JSON_FILE + ".bak"
+    try:
+        os.replace(JSON_FILE, backup)
+        log.info(f"[BabyLog] 已迁移 {len(rows)} 条 JSON 数据 → SQLite{suffix}，原文件备份至 {backup}")
+    except Exception:
+        log.info(f"[BabyLog] 已迁移 {len(rows)} 条 JSON 数据 → SQLite{suffix}")
+
+
+# 模块加载时初始化 + 自动迁移（只跑一次）
+_init_db()
+_migrate_from_json()
+
+
+# ── 公共查询 API ──────────────────────────────────────────────────────
+
+def list_dates() -> list:
+    """有日志的日期列表（降序）。"""
+    with _connect() as conn:
+        return [r[0] for r in conn.execute(
+            "SELECT DISTINCT date FROM entries ORDER BY date DESC"
+        )]
+
+
+def get_date_entries(date_str: str) -> list:
+    """指定日期的所有条目，按 ts 升序。"""
+    with _connect() as conn:
+        return [_row_to_entry(r) for r in conn.execute(
+            "SELECT * FROM entries WHERE date=? ORDER BY ts", (date_str,)
+        )]
+
+
+# ── 兼容旧 _load() / _save() 接口 ────────────────────────────────────
+# 保留 dict-of-lists 形态供原业务函数使用，业务逻辑零改动；
+# 写入时 _save() 走全量重写（247 条规模性能 OK，几千条仍可接受）。
 
 def _load() -> dict:
-    if not os.path.exists(LOG_FILE):
-        return {}
-    try:
-        with open(LOG_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    out: dict = {}
+    with _connect() as conn:
+        for row in conn.execute("SELECT * FROM entries ORDER BY ts"):
+            out.setdefault(row["date"], []).append(_row_to_entry(row))
+    return out
 
 
 def _save(data: dict) -> None:
-    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-    with open(LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    rows: list = []
+    for date_key, entries in data.items():
+        for e in entries:
+            rows.append(_entry_to_row(e, date_key))
+    with _db_lock, _connect() as conn:
+        conn.execute("DELETE FROM entries")
+        if rows:
+            conn.executemany(
+                "INSERT INTO entries (ts, date, type, time, action, payload) VALUES (?,?,?,?,?,?)",
+                rows,
+            )
+        conn.commit()
+
+
+# ── 业务逻辑（与旧版 JSON 实现完全一致）──────────────────────────────
+
+def _today() -> str:
+    return date.today().isoformat()
 
 
 def _parse_birth_date(s: str):
@@ -183,8 +339,7 @@ def update_entry(ts: int, updates: dict) -> dict | None:
 
 
 def get_today() -> list:
-    entries = _load().get(_today(), [])
-    return sorted(entries, key=lambda e: e.get("ts", 0))
+    return get_date_entries(_today())
 
 
 def get_stats() -> dict:
@@ -298,7 +453,7 @@ def get_stats() -> dict:
         # 所有喂奶（倒计时 / 提醒）
         "feed_count":        len(feeds),
         "total_ml":          total_ml,
-        "avg_ml":            avg_ml,
+        "avg_ml":             avg_ml,
         "last_feed_time":    last_feed["time"] if last_feed else None,
         "last_feed_ml":      last_feed.get("amount_ml") if last_feed else None,
         "next_feed_ts":      next_feed_ts,
