@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import atexit
 import json
 import os
 import subprocess
@@ -224,13 +225,33 @@ def _get_proc_cmdline(pid: int) -> str:
 
 
 def _pid_is_ours(pid: int) -> bool:
-    """判断 PID 是否属于本软件（已追踪进程，或命令行包含项目目录）。"""
+    """判断 PID 是否属于本软件（已追踪进程、命令行含项目目录、或 cwd 为项目目录）。"""
     for proc in _procs.values():
         if proc and proc.pid == pid:
             return True
-    cmdline = _get_proc_cmdline(pid).replace("\\", "/").lower()
     base    = BASE_DIR.replace("\\", "/").lower()
-    return bool(cmdline) and base in cmdline
+    cmdline = _get_proc_cmdline(pid).replace("\\", "/").lower()
+    if cmdline and base in cmdline:
+        return True
+    return _get_proc_cwd(pid).replace("\\", "/").lower() == base
+
+
+def _get_proc_cwd(pid: int) -> str:
+    """返回进程的当前工作目录，失败时返回空串。"""
+    try:
+        if sys.platform == "win32":
+            # Windows 没有便捷 API；用 wmic 取 ExecutablePath 同目录作近似
+            return ""
+        out = subprocess.check_output(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        for line in out.splitlines():
+            if line.startswith("n"):
+                return line[1:].strip()
+    except Exception:
+        pass
+    return ""
 
 
 def _kill_tree(pid: int):
@@ -264,12 +285,73 @@ async def _do_stop(svc: str):
 
 # ── FastAPI ───────────────────────────────────────────────────────────
 
+def _scan_and_kill_orphans() -> None:
+    """启动前扫描同项目残留的孤儿子进程并整组干掉（PPID=1, cwd 在项目目录下）。
+    适用于没监听端口的服务（如 recorder_service.py），端口自检无法发现它们。"""
+    if sys.platform == "win32":
+        return
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-f", "ble_service.py|recorder_service.py|server.py"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        )
+    except Exception:
+        return
+    me = os.getpid()
+    base = BASE_DIR.replace("\\", "/").lower()
+    for pid_str in out.split():
+        try:
+            pid = int(pid_str)
+        except ValueError:
+            continue
+        if pid == me:
+            continue
+        try:
+            ppid = int(subprocess.check_output(
+                ["ps", "-p", str(pid), "-o", "ppid="],
+                text=True, stderr=subprocess.DEVNULL, timeout=3,
+            ).strip())
+        except Exception:
+            continue
+        if ppid != 1:
+            continue
+        if _get_proc_cwd(pid).replace("\\", "/").lower() != base:
+            continue
+        cmdline = _get_proc_cmdline(pid)[:100]
+        print(f"[manager] 清理孤儿 PID {pid}: {cmdline}")
+        try:
+            _kill_tree(pid)
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
+    _scan_and_kill_orphans()
     for svc in ("go2rtc", "ble", "server", "recorder"):
         await asyncio.sleep(0.3)
         await _do_start(svc)
-    yield
+    try:
+        yield
+    finally:
+        for svc in ("recorder", "server", "ble", "go2rtc"):
+            try:
+                await _do_stop(svc)
+            except Exception as e:
+                _append_log(svc, f"[shutdown] {e}")
+
+
+def _cleanup_at_exit():
+    """兜底：lifespan 未执行（异常退出 / debugger 强停）时同步清理子进程组。"""
+    for proc in _procs.values():
+        if proc and proc.returncode is None:
+            try:
+                _kill_tree(proc.pid)
+            except Exception:
+                pass
+
+
+atexit.register(_cleanup_at_exit)
 
 
 app = FastAPI(title="BabySentinel Manager", lifespan=_lifespan)

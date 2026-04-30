@@ -11,18 +11,29 @@ baby_code 保存在 baby_code.json, 重启后无需再配对
 import asyncio
 import json
 import os
+import sys
 import time
 from bleak import BleakClient
 from datetime import datetime
 
-ADDRESS   = "D4:92:DB:03:D7:59"
+# macOS 的 CoreBluetooth 在 write-without-response 上偶尔丢包，
+# 必须用 write-with-response (ATT ACK)。Windows / Linux 上沿用原 False 行为。
+_WRITE_RESP = sys.platform == "darwin"
+
 _ROOT     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CODE_FILE = os.path.join(_ROOT, "baby_code.json")
 LOG_FILE  = os.path.join(_ROOT, "logs", "ble_protocol.log")
 
+# 从主项目 config.json 读取 ble_address (扫描/连接) 与 ble_mac (拼 UUID)
+with open(os.path.join(_ROOT, "config.json"), encoding="utf-8") as _f:
+    _CFG = json.load(_f)
+ADDRESS = _CFG["ble_address"]
+_MAC_HEX = (_CFG.get("ble_mac") or _CFG.get("ble_address", "")) \
+    .replace(":", "").replace("-", "").lower()[-12:]
+
 # UUID 前缀 + MAC 后缀
 def _uuid(prefix):
-    return f"{prefix}-{ADDRESS.replace(':', '').lower()}"
+    return f"{prefix}-{_MAC_HEX}"
 
 CHAR_REGISTER   = _uuid("01021921-9e06-a079-2e3f")  # DATA_CHAR_1
 CHAR_REALTIME   = _uuid("01021922-9e06-a079-2e3f")  # DATA_CHAR_2
@@ -198,24 +209,70 @@ async def phase1_pair() -> bytes | None:
 
     async with BleakClient(ADDRESS, timeout=20) as client:
         log(f"[{now()}] 已连接")
+
+        # ── 全 CHAR 监听：把所有从设备来的通知打印出来用于诊断 ────────────
+        async def _spy(name: str, _sender, data: bytearray):
+            d = bytes(data)
+            log(f"[{now()}] RX {name}: {d.hex(' ')}")
+
+        # CHAR_1 (REGISTER) 仍然走原 on_register 处理 0x69/0x68 协议
+        # 同时其他 3 个 char 全部 spy，纯粹打印
         await client.start_notify(CHAR_REGISTER, on_register)
+        for _ch, _name in [
+            (CHAR_REALTIME,   "CHAR_2"),
+            (CHAR_DATA_GUIDE, "CHAR_3"),
+            (CHAR_SETTINGS,   "CHAR_4"),
+        ]:
+            try:
+                await client.start_notify(
+                    _ch, lambda s, d, n=_name: asyncio.create_task(_spy(n, s, d))
+                )
+                log(f"[{now()}] 已监听 {_name}")
+            except Exception as e:
+                log(f"[{now()}] 监听 {_name} 失败: {e}")
+
+        # 列出 GATT 全部 char + 属性，确认 0x01021921... 是否真的存在且可写
+        try:
+            for svc in client.services:
+                log(f"[{now()}] SVC {svc.uuid}")
+                for ch in svc.characteristics:
+                    log(f"           CHR {ch.uuid}  props={','.join(ch.properties)}")
+        except Exception as e:
+            log(f"[{now()}] 服务枚举失败: {e}")
+
         await asyncio.sleep(0.5)
 
-        # Step 1: 发送 UID 包
+        # Step 1: 发送 UID 包（macOS 用 ACK 写入修丢包；Windows 沿用原 response=False）
         log(f"[{now()}] TX UID (0x69): {UID_PACKET.hex()}")
-        await client.write_gatt_char(CHAR_REGISTER, UID_PACKET, response=False)
-
-        # 等待 0x69 响应
         try:
-            await asyncio.wait_for(ev_69.wait(), timeout=10)
+            await client.write_gatt_char(CHAR_REGISTER, UID_PACKET, response=_WRITE_RESP)
+            log(f"[{now()}] UID 写入完成{' (ACK)' if _WRITE_RESP else ''}")
+        except Exception as e:
+            log(f"[{now()}] UID 写入异常: {e}")
+
+        # 等待 0x69 响应；5s 内没回则重发一次（macOS 偶发首包丢失）
+        try:
+            await asyncio.wait_for(ev_69.wait(), timeout=5)
         except asyncio.TimeoutError:
-            log(f"[{now()}] 超时: 未收到 0x69 响应 (设备是否在配对模式?)")
-            return None
+            log(f"[{now()}] 5s 未收到 0x69 响应，重发 UID 包...")
+            try:
+                await client.write_gatt_char(CHAR_REGISTER, UID_PACKET, response=_WRITE_RESP)
+            except Exception as e:
+                log(f"[{now()}] UID 重发异常: {e}")
+            try:
+                await asyncio.wait_for(ev_69.wait(), timeout=8)
+            except asyncio.TimeoutError:
+                log(f"[{now()}] 超时: 未收到 0x69 响应 (设备是否在配对模式?)")
+                return None
 
         # Step 2: 发送 RegisterType
         pkt = build_register_type()
         log(f"[{now()}] TX RegisterType (0x68): {pkt.hex()}")
-        await client.write_gatt_char(CHAR_REGISTER, pkt, response=False)
+        try:
+            await client.write_gatt_char(CHAR_REGISTER, pkt, response=_WRITE_RESP)
+            log(f"[{now()}] RegisterType 写入完成{' (ACK)' if _WRITE_RESP else ''}")
+        except Exception as e:
+            log(f"[{now()}] RegisterType 写入异常: {e}")
 
         # 等待 0x68 响应 (含 baby_code)
         try:

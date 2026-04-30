@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import BASE_DIR, CFG, log
+from app.config import BASE_DIR, CFG, REC_DIR, log
 from app.state import active_ws, sensor_state
 import app.state as state
 import app.camera as camera
@@ -20,8 +20,8 @@ from notify.discord_bot import GatewayClient
 
 # BLE 字段由 ble_service.py 进程管理，通过 /api/internal/sensor 推送过来
 _BLE_FIELDS = frozenset((
-    "breath_rate", "temperature", "humidity", "posture",
-    "battery", "is_wearing", "ble_ok", "last_update",
+    "breath_rate", "temperature", "posture",
+    "battery", "ble_ok", "last_update",
 ))
 
 _FEED_REPEAT    = CFG.get("feed_repeat_s", 1800)
@@ -82,7 +82,6 @@ async def _feed_reminder_loop():
 async def _lifespan(_: FastAPI):
     # BLE 已分离为独立进程 ble_service.py，此处不再启动
     asyncio.create_task(camera.rtsp_loop())
-    # asyncio.create_task(camera.cry_loop())  # 暂时禁用
     asyncio.create_task(_feed_reminder_loop())
     # 录像由独立进程 recorder_service.py 负责，此处不再启动
 
@@ -98,12 +97,12 @@ async def _lifespan(_: FastAPI):
 
 
 import os as _os
-_REC_DIR = _os.path.join(BASE_DIR, "recordings")
-_os.makedirs(_REC_DIR, exist_ok=True)
+import csv as _csv
+_os.makedirs(REC_DIR, exist_ok=True)
 
 app = FastAPI(lifespan=_lifespan, title="BabySentinel")
-app.mount("/static",      StaticFiles(directory=str(BASE_DIR + "/static")), name="static")
-app.mount("/recordings",  StaticFiles(directory=_REC_DIR),                  name="recordings")
+app.mount("/static",      StaticFiles(directory=_os.path.join(BASE_DIR, "static")), name="static")
+app.mount("/recordings",  StaticFiles(directory=REC_DIR),                           name="recordings")
 
 
 @app.websocket("/ws")
@@ -128,7 +127,7 @@ async def ws_handler(websocket: WebSocket):
 
 @app.get("/")
 async def root():
-    with open(BASE_DIR + "/static/index.html", encoding="utf-8") as f:
+    with open(_os.path.join(BASE_DIR, "static", "index.html"), encoding="utf-8") as f:
         html = f.read().replace("__MANAGER_PORT__", str(CFG.get("manager_port", 9091)))
     return HTMLResponse(html)
 
@@ -226,18 +225,18 @@ async def post_sensor_refresh():
 
 @app.get("/playback")
 async def playback_page():
-    with open(BASE_DIR + "/static/playback.html", encoding="utf-8") as f:
+    with open(_os.path.join(BASE_DIR, "static", "playback.html"), encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
 
 @app.get("/api/recordings")
 async def get_recording_dates():
     """返回有录像的日期列表（降序）。"""
-    if not _os.path.isdir(_REC_DIR):
+    if not _os.path.isdir(REC_DIR):
         return JSONResponse([])
     dates = [
-        d for d in _os.listdir(_REC_DIR)
-        if _os.path.isdir(_os.path.join(_REC_DIR, d)) and len(d) == 10
+        d for d in _os.listdir(REC_DIR)
+        if _os.path.isdir(_os.path.join(REC_DIR, d)) and len(d) == 10
     ]
     return JSONResponse(sorted(dates, reverse=True))
 
@@ -245,11 +244,10 @@ async def get_recording_dates():
 @app.get("/api/recordings/{date}/segments")
 async def get_recording_segments(date: str):
     """返回指定日期的视频片段列表（含开始时间戳）。"""
-    vid_dir = _os.path.join(_REC_DIR, date, "video")
+    vid_dir = _os.path.join(REC_DIR, date, "video")
     if not _os.path.isdir(vid_dir):
         return JSONResponse([])
     from datetime import datetime as _dt
-    import csv as _csv
 
     # Load PTS-based timestamps from index.csv if available (written by ffmpeg -segment_list).
     # CSV format: filename,start_pts_time,end_pts_time  — values are Unix timestamps from TAPO camera.
@@ -290,7 +288,7 @@ async def get_recording_segments(date: str):
 @app.get("/api/recordings/{date}/sensors")
 async def get_recording_sensors(date: str):
     """返回指定日期的传感器时序数据（JSON 数组）。"""
-    path = _os.path.join(_REC_DIR, date, "sensors.jsonl")
+    path = _os.path.join(REC_DIR, date, "sensors.jsonl")
     if not _os.path.exists(path):
         return JSONResponse([])
     rows = []

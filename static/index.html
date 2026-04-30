@@ -909,12 +909,8 @@ video {
 
         <div class="sense-u-section">
 
-        <!-- 状态行：佩戴 + 连接 + 电量 + 更新时间 -->
+        <!-- 状态行：连接 + 电量 + 更新时间 -->
         <div class="status-row">
-          <div class="status-pill" id="pill-wearing">
-            <div class="dot"></div>
-            <span id="txt-wearing" data-i18n="wearUnknown">佩戴状态未知</span>
-          </div>
           <div class="status-pill" id="card-status">
             <span id="val-status">--</span>
             <span id="sub-status" class="status-pill-sub">Sense-U</span>
@@ -1135,8 +1131,6 @@ const els = {
   postureLoading: $('posture-loading'),
   cardPosture:    $('card-posture'),
 
-  pillWearing: $('pill-wearing'),
-  txtWearing:  $('txt-wearing'),
   pillUpdate:  $('pill-update'),
   txtUpdate:   $('txt-update'),
 
@@ -1340,13 +1334,6 @@ function renderSensor(s) {
     els.postureLoading.style.display = 'none';
     els.cardPosture.className = 'card sensor-card' + (prone ? ' alert-card' : '');
     els.posture.style.color = prone ? 'var(--red)' : 'var(--text)';
-  }
-
-  // Wearing
-  if (s.is_wearing != null) {
-    const w = s.is_wearing;
-    els.pillWearing.className = 'status-pill' + (w ? ' ok' : '');
-    els.txtWearing.textContent = w ? T.wearing : T.notWearing;
   }
 
   // Last update

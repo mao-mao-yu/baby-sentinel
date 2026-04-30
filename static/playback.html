@@ -141,7 +141,6 @@ video { width: 100%; height: 100%; display: block; object-fit: contain; }
       <div class="s-item">🌡️ <span class="val" id="sb-temp">--</span> °C</div>
       <div class="s-item">🛏️ <span class="val" id="sb-posture">--</span></div>
       <div class="s-item">🔋 <span class="val" id="sb-battery">--</span>%</div>
-      <div class="s-item">👶 <span class="val" id="sb-wear">--</span></div>
     </div>
   </div>
 
@@ -211,14 +210,12 @@ function renderSensor(s) {
   const temp    = s.temperature != null ? s.temperature + ' °C'    : '--';
   const posture = fmtPosture(s.posture);
   const battery = s.battery    != null ? s.battery + '%'           : '--';
-  const wear    = s.is_wearing  != null ? (s.is_wearing ? '装着中' : '未装着') : '--';
 
   // overlay（sb-time / sb-clock 由 setTimecode 管理，此处不覆盖）
   if ($('sb-breath'))  $('sb-breath').textContent  = s.breath_rate ?? '--';
   if ($('sb-temp'))    $('sb-temp').textContent     = s.temperature ?? '--';
   if ($('sb-posture')) $('sb-posture').textContent  = posture;
   if ($('sb-battery')) $('sb-battery').textContent  = s.battery     ?? '--';
-  if ($('sb-wear'))    $('sb-wear').textContent      = wear;
 
   // panel
   if ($('sp-breath'))  $('sp-breath').textContent   = breath;

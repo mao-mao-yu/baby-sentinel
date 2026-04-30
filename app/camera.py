@@ -1,12 +1,10 @@
 import asyncio
-import json
 import os
 import sys
 import urllib.request
 
 import app.state as state
 from app.config import BASE_DIR, CFG, log
-from app.alerts import trigger_alert
 
 # ── go2rtc 配置生成 ───────────────────────────────────────────────────
 
@@ -92,47 +90,3 @@ async def rtsp_loop() -> None:
         state.rtsp_proc = None
         log.debug("[go2rtc] 3 秒后重试...")
         await asyncio.sleep(3)
-
-# ── 哭声检测子进程循环 ────────────────────────────────────────────────
-
-async def cry_loop() -> None:
-    if "YOUR_PASSWORD" in CFG["tapo_rtsp"]:
-        return
-
-    url      = "rtsp://127.0.0.1:8554/baby"
-    cry_dir  = os.path.join(BASE_DIR, "cry_detector")
-    detector = os.path.join(cry_dir, "cry_detector.py")
-    if not os.path.exists(detector):
-        log.error("[Cry] 未找到 cry_detector/cry_detector.py")
-        return
-
-    venv_py = os.path.join(BASE_DIR, "venv", "Scripts", "python.exe")
-    python  = venv_py if os.path.exists(venv_py) else sys.executable
-    ffmpeg  = CFG.get("ffmpeg_path", "")
-
-    while True:
-        log.info(f"[Cry] 启动检测器: {python}")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                python, detector, url, CFG.get("log_level", "INFO"), ffmpeg,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=None,
-            )
-            while proc.returncode is None:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                try:
-                    msg = json.loads(line.decode())
-                    if msg.get("type") == "cry":
-                        conf = msg.get("confidence", 0)
-                        await trigger_alert(
-                            f"👶 检测到婴儿哭声！(置信度 {conf:.0%})", "danger"
-                        )
-                except Exception:
-                    pass
-        except Exception as e:
-            log.warning(f"[Cry] 错误: {e}")
-
-        log.debug("[Cry] 5 秒后重启...")
-        await asyncio.sleep(5)

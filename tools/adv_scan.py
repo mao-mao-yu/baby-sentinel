@@ -1,15 +1,22 @@
-"""
-BLE 广播数据扫描脚本
-设备进入配对模式后运行，捕获 Manufacturer Specific Data（可能含配对码）
+"""BLE 广播数据扫描脚本。
+设备进入配对模式后运行，捕获 Manufacturer Specific Data（可能含配对码）。
+设备地址从主项目的 config.json 读取（ble_address 字段）。
 """
 import asyncio
+import json
+import os
+from datetime import datetime
+
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
-from datetime import datetime
 
-TARGET = "D4:92:DB:03:D7:59"
-seen_hashes = set()
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+with open(os.path.join(_ROOT, "config.json"), encoding="utf-8") as _f:
+    TARGET = json.load(_f)["ble_address"]
+
+seen_hashes: set = set()
 
 
 def on_advertisement(device: BLEDevice, adv: AdvertisementData):
@@ -33,14 +40,11 @@ def on_advertisement(device: BLEDevice, adv: AdvertisementData):
 
     if adv.manufacturer_data:
         for company_id, data in adv.manufacturer_data.items():
-            hex_data = data.hex()
-            print(f"  Manufacturer Data  company=0x{company_id:04X}  data={hex_data}")
+            print(f"  Manufacturer Data  company=0x{company_id:04X}  data={data.hex()}")
             if len(data) >= 6:
-                # 尝试把前6字节当作配对码
                 candidate = " ".join(f"{b:02X}" for b in data[:6])
                 print(f"    → 前6字节候选配对码: {candidate}")
             if len(data) >= 2:
-                # 也打印全部字节对照
                 all_bytes = " ".join(f"{b:02X}" for b in data)
                 print(f"    → 全部数据字节:     {all_bytes}")
     else:
@@ -57,7 +61,7 @@ def on_advertisement(device: BLEDevice, adv: AdvertisementData):
 
 async def main():
     print(f"扫描 {TARGET} 的广播数据 ...")
-    print("请确保设备已进入配对模式（长按两下，蓝灯慢闪）\n")
+    print("请确保设备已进入配对模式（长按两下，蓝灯快闪）\n")
     print("按 Ctrl+C 停止\n")
 
     scanner = BleakScanner(detection_callback=on_advertisement)
@@ -72,4 +76,5 @@ async def main():
         print("\n扫描结束")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

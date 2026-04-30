@@ -1,26 +1,18 @@
-"""
-GATT 完整服务发现脚本
-在设备配对模式下运行，列出所有 Service / Characteristic / Property
+"""GATT 完整服务发现脚本。
+连接设备后列出所有 Service / Characteristic / Property，可读字段尝试读一次。
+设备地址从主项目的 config.json 读取（ble_address 字段）。
 """
 import asyncio
-from bleak import BleakClient, BleakScanner
+import json
+import os
 from datetime import datetime
 
-ADDRESS = "D4:92:DB:03:D7:59"
-
-PROP_MAP = {
-    "broadcast":          0x01,
-    "read":               0x02,
-    "write-without-resp": 0x04,
-    "write":              0x08,
-    "notify":             0x10,
-    "indicate":           0x20,
-    "auth-signed-write":  0x40,
-}
+from bleak import BleakClient
 
 
-def props_str(props):
-    return ", ".join(p for p in props)
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+with open(os.path.join(_ROOT, "config.json"), encoding="utf-8") as _f:
+    ADDRESS = json.load(_f)["ble_address"]
 
 
 async def discover():
@@ -28,18 +20,16 @@ async def discover():
     async with BleakClient(ADDRESS, timeout=15) as client:
         print(f"已连接: {client.is_connected}\n")
 
-        services = client.services
-        for svc in services:
+        for svc in client.services:
             print(f"{'='*70}")
             print(f"SERVICE  {svc.uuid}")
             print(f"         描述: {svc.description}")
             for char in svc.characteristics:
-                props = props_str(char.properties)
+                props = ", ".join(char.properties)
                 print(f"  CHAR   {char.uuid}")
                 print(f"         handle={char.handle}  描述={char.description}")
                 print(f"         properties=[{props}]")
 
-                # 如果可读，尝试读一下
                 if "read" in char.properties:
                     try:
                         val = await client.read_gatt_char(char.uuid)
@@ -47,11 +37,8 @@ async def discover():
                             text = val.decode("utf-8").strip()
                         except Exception:
                             text = ""
-                        hex_val = val.hex()
-                        if text:
-                            print(f"         值: {hex_val}  ({text})")
-                        else:
-                            print(f"         值: {hex_val}")
+                        suffix = f"  ({text})" if text else ""
+                        print(f"         值: {val.hex()}{suffix}")
                     except Exception as e:
                         print(f"         读取失败: {e}")
 
@@ -60,4 +47,5 @@ async def discover():
             print()
 
 
-asyncio.run(discover())
+if __name__ == "__main__":
+    asyncio.run(discover())

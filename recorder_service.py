@@ -65,6 +65,25 @@ def _go2rtc_ready() -> bool:
     return _http_get(f"http://127.0.0.1:{port}/api/streams") is not None
 
 
+async def _terminate_proc(proc: asyncio.subprocess.Process, name: str = "proc",
+                          term_timeout: float = 5, kill_timeout: float = 3) -> None:
+    """安全终止子进程：先 SIGTERM 等 term_timeout 秒，超时则 SIGKILL。
+    确保不会卡死调用方（如跨日切换时 ffmpeg 因 RTSP 阻塞收不到信号）。"""
+    if proc.returncode is not None:
+        return
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=term_timeout)
+        return
+    except asyncio.TimeoutError:
+        log.warning(f"[{name}] {term_timeout}s 内未退出，强制 kill")
+    proc.kill()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=kill_timeout)
+    except asyncio.TimeoutError:
+        log.warning(f"[{name}] SIGKILL 后仍未退出（已交由 OS 回收）")
+
+
 # ── 传感器记录 ────────────────────────────────────────────────────────
 
 async def sensor_record_loop() -> None:
@@ -84,10 +103,8 @@ async def sensor_record_loop() -> None:
                 "time":        datetime.now().strftime("%H:%M:%S"),
                 "breath_rate": s.get("breath_rate"),
                 "temperature": s.get("temperature"),
-                "humidity":    s.get("humidity"),
                 "posture":     s.get("posture"),
                 "battery":     s.get("battery"),
-                "is_wearing":  s.get("is_wearing"),
             }
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -159,8 +176,7 @@ async def camera_record_loop() -> None:
                 await asyncio.sleep(10)
                 if date.today() != today:
                     log.info("[Camera] 日期变更，重启录像至新目录")
-                    proc.terminate()
-                    await proc.wait()
+                    await _terminate_proc(proc, name="Camera")
                     break
 
             drain_task.cancel()

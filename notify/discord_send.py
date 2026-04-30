@@ -1,45 +1,20 @@
-"""Discord Bot 通知 — HTTP REST 发送消息"""
+"""Discord Bot 通知 — 同步发送告警消息（供 run_in_executor 使用）"""
 
-import json
 import logging
-import urllib.error
-import urllib.request
+
+from notify._http import request
 
 log = logging.getLogger("BabySentinel")
 
-_API    = "https://discord.com/api/v10"
 _COLORS = {"danger": 0xE74C3C, "warning": 0xF39C12, "info": 0x3498DB}
 
 _dm_channel_cache: dict[str, str] = {}
 
 
-def _request(token: str, method: str, path: str, payload: dict | None = None) -> dict | None:
-    url  = f"{_API}{path}"
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload else None
-    req  = urllib.request.Request(
-        url, data=data,
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type":  "application/json; charset=utf-8",
-            "User-Agent":    "BabySentinel (https://github.com, 1.0)",
-        },
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        log.warning(f"[Discord] HTTP {e.code} {path}: {e.read().decode(errors='replace')}")
-        return None
-    except Exception as e:
-        log.warning(f"[Discord] 请求失败 {path}: {e}")
-        return None
-
-
 def _get_dm_channel(token: str, user_id: str) -> str | None:
     if user_id in _dm_channel_cache:
         return _dm_channel_cache[user_id]
-    result = _request(token, "POST", "/users/@me/channels", {"recipient_id": user_id})
+    result = request(token, "POST", "/users/@me/channels", {"recipient_id": user_id})
     if result and "id" in result:
         _dm_channel_cache[user_id] = result["id"]
         return result["id"]
@@ -49,7 +24,7 @@ def _get_dm_channel(token: str, user_id: str) -> str | None:
 def _send_to_channel(token: str, channel_id: str, message: str, level: str) -> bool:
     color   = _COLORS.get(level, _COLORS["warning"])
     payload = {"embeds": [{"description": message, "color": color}]}
-    return _request(token, "POST", f"/channels/{channel_id}/messages", payload) is not None
+    return request(token, "POST", f"/channels/{channel_id}/messages", payload) is not None
 
 
 def _to_list(val) -> list[str]:

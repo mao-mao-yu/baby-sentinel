@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 import app.state as state
+import app.ble as ble
 from app.config import CFG, log
 
 BLE_PORT = CFG.get("ble_port", 8082)
@@ -41,13 +42,8 @@ async def _push_to_server(data: dict) -> None:
         pass  # server.py 未启动或暂时不可达，静默忽略
 
 
-# 在 import ble / alerts 之后立即替换其模块级 broadcast 引用，
-# 使所有广播调用走 HTTP 推送而非 WebSocket（BLE 服务进程内无 WS 客户端）
-import app.ble as ble
-import app.alerts as alerts
-
-ble.broadcast    = _push_to_server
-alerts.broadcast = _push_to_server
+# 本进程内无 WebSocket 客户端，把所有 broadcast 改为 HTTP 推送给 server.py
+state.set_broadcast(_push_to_server)
 
 # ── FastAPI ───────────────────────────────────────────────────────────
 

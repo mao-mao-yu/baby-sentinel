@@ -4,15 +4,14 @@ import asyncio
 import base64
 import json
 import logging
-import urllib.error
-import urllib.request
 from typing import Callable
 
 import websockets
 
+from notify._http import request_async as _http
+
 log = logging.getLogger("BabySentinel")
 
-_API         = "https://discord.com/api/v10"
 _GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 _COMMANDS = [
@@ -26,42 +25,11 @@ def _parse_app_id(token: str) -> str:
     return base64.b64decode(seg).decode()
 
 
-async def _http(token: str, method: str, path: str, payload=None) -> dict | None:
-    url  = f"{_API}{path}"
-    data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
-    req  = urllib.request.Request(
-        url, data=data,
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type":  "application/json; charset=utf-8",
-            "User-Agent":    "BabySentinel (https://github.com, 1.0)",
-        },
-        method=method,
-    )
-    loop = asyncio.get_event_loop()
-
-    def _do():
-        try:
-            with urllib.request.urlopen(req, timeout=8) as r:
-                body = r.read()
-                return json.loads(body) if body else {}
-        except urllib.error.HTTPError as e:
-            log.warning(f"[Discord] HTTP {e.code} {path}: {e.read().decode(errors='replace')}")
-            return None
-        except Exception as e:
-            log.warning(f"[Discord] 请求失败 {path}: {e}")
-            return None
-
-    return await loop.run_in_executor(None, _do)
-
-
-_POSTURE_JA = {"仰卧": "仰向け", "俯卧": "うつ伏せ", "左侧卧": "左向き", "右侧卧": "右向き"}
+_POSTURE_JA = {"仰卧": "仰向け", "俯卧": "うつ伏せ", "左侧卧": "左向き", "右侧卧": "右向き", "坐姿": "お座り"}
 
 
 def _fmt_status(s: dict) -> str:
     lines = [f"{'🟢' if s.get('ble_ok') else '🔴'} BLE {'接続中' if s.get('ble_ok') else '未接続'}"]
-    if s.get("is_wearing") is not None:
-        lines.append("👶 装着中" if s["is_wearing"] else "❌ 未装着")
     if s.get("posture"):
         posture_ja = _POSTURE_JA.get(s["posture"], s["posture"])
         lines.append(f"🤸 姿勢: {posture_ja}")
