@@ -24,10 +24,25 @@ _BLE_FIELDS = frozenset((
     "battery", "ble_ok", "last_update",
 ))
 
-_FEED_REPEAT    = CFG.get("feed_repeat_s", 1800)
+_FEED_REPEAT        = CFG.get("feed_repeat_s", 1800)
+_BLE_HEALTH_TIMEOUT = CFG.get("ble_health_timeout_s", 10)  # 超过 N 秒没收到 BLE 推送就标未连接
 
 _reminder_feed_ts:   float = 0   # 正在追踪的那次喂奶的 ts
 _last_reminder_time: float = 0   # 上次发出提醒的时刻
+_last_ble_push_at:   float = 0   # 最近一次 ble_service.py 推送时刻（心跳）
+
+
+async def _ble_health_loop():
+    """ble_service.py 心跳监测：长时间无推送 → 标 ble_ok=false 广播。"""
+    while True:
+        await asyncio.sleep(_BLE_HEALTH_TIMEOUT / 2)
+        if _last_ble_push_at == 0:
+            continue  # 还从未收到过推送
+        elapsed = time.time() - _last_ble_push_at
+        if elapsed > _BLE_HEALTH_TIMEOUT and sensor_state.get("ble_ok"):
+            sensor_state["ble_ok"] = False
+            log.warning(f"[Server] BLE 心跳超时 ({elapsed:.0f}s)，标记未连接")
+            await state.broadcast({"type": "sensor", **sensor_state})
 
 
 async def _feed_reminder_loop():
@@ -83,6 +98,7 @@ async def _lifespan(_: FastAPI):
     # BLE 已分离为独立进程 ble_service.py，此处不再启动
     asyncio.create_task(camera.rtsp_loop())
     asyncio.create_task(_feed_reminder_loop())
+    asyncio.create_task(_ble_health_loop())
     # 录像由独立进程 recorder_service.py 负责，此处不再启动
 
     token = CFG.get("discord_token", "")
@@ -191,8 +207,10 @@ async def get_sensor():
 @app.post("/api/internal/sensor")
 async def internal_sensor_push(request: Request):
     """接收来自 ble_service.py 的传感器 / 告警推送。"""
+    global _last_ble_push_at
     data = await request.json()
     if data.get("type") == "sensor":
+        _last_ble_push_at = time.time()  # 心跳：每次推送即视为 ble_service 还活着
         for k, v in data.items():
             if k in _BLE_FIELDS:
                 sensor_state[k] = v

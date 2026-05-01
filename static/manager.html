@@ -90,14 +90,44 @@ header h1 { font-size: 1rem; font-weight: 600; flex: 1; }
   scrollbar-width: thin; scrollbar-color: var(--border) transparent;
 }
 .log-box .ts { color: #4b5563; }
+
+/* ── 手机响应式：< 768px 切单列 + 页面可纵向滚动 ─────────────────── */
+@media (max-width: 768px) {
+  body {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  header {
+    padding: 10px 14px;
+    gap: 8px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 0.9rem; }
+  .header-link { font-size: 0.75rem; }
+  .grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    flex: none;
+    gap: 10px;
+    padding: 10px;
+  }
+  .card { min-height: 280px; }
+  .log-box {
+    flex: none;
+    max-height: 180px;
+    font-size: 0.72rem;
+  }
+}
 </style>
 </head>
 <body>
 
 <header>
   <h1>🛠 BabySentinel Manager</h1>
-  <a class="header-link" id="link-main" href="#" target="_blank">→ 主界面</a>
-  <a class="header-link" id="link-playback" href="#" target="_blank">→ 回放</a>
+  <a class="header-link" id="link-main" href="#">→ 主界面</a>
+  <a class="header-link" id="link-playback" href="#">→ 回放</a>
 </header>
 
 <div class="grid" id="grid"></div>

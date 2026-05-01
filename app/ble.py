@@ -51,29 +51,42 @@ def load_baby_code() -> Optional[bytes]:
 # ── 传感器解析 ────────────────────────────────────────────────────────
 
 _last_prone_alert: float = 0
+_prone_since:      float = 0   # 当前这段连续俯卧的开始时刻；非俯卧时为 0
 _POSTURES = {0: "仰卧", 1: "俯卧", 2: "左侧卧", 3: "右侧卧", 4: "坐姿"}
 
 
 async def parse_baby_data(data: bytes) -> None:
     """解析 0xBA get_baby_data 响应包。
     布局: [0]=0xBA [2]=姿势 [3-4]=衣内温度*10 (LE) [6]=呼吸 [9]=电量 [10]=佩戴"""
-    global _last_prone_alert
+    global _last_prone_alert, _prone_since
     if len(data) < 11:
         return
 
     # 姿势：data[2] 单字节，0=仰 1=俯 2=左 3=右 4=坐
-    posture_id   = _u8(data[2])
-    prev_posture = sensor_state.get("posture")
+    posture_id = _u8(data[2])
     if posture_id in _POSTURES:
         sensor_state["posture"] = _POSTURES[posture_id]
         log.debug(f"[BLE] 姿势: {_POSTURES[posture_id]}")
     else:
         log.warning(f"[BLE] 姿势 ID 未知: {posture_id} (0x{posture_id:02x})  data={data.hex(' ')}")
+
+    # 俯卧报警：持续 ≥ prone_alert_threshold_s 才首次报警，
+    # 之后每 prone_alert_cooldown_s 重复一次（如仍在俯卧）。
+    now = time.time()
     if posture_id == 1:
-        now = time.time()
-        if prev_posture != "俯卧" or now - _last_prone_alert > CFG.get("prone_alert_cooldown_s", 300):
+        if _prone_since == 0:
+            _prone_since = now
+        elapsed   = now - _prone_since
+        threshold = CFG.get("prone_alert_threshold_s", 30)
+        cooldown  = CFG.get("prone_alert_cooldown_s", 300)
+        if elapsed >= threshold and (now - _last_prone_alert) > cooldown:
             _last_prone_alert = now
-            await trigger_alert("🚨 うつ伏せです！すぐ確認してください！", "danger")
+            await trigger_alert(
+                f"🚨 うつ伏せが {int(elapsed)} 秒続いています！すぐ確認してください！",
+                "danger",
+            )
+    else:
+        _prone_since = 0   # 切回非俯卧 → 计时重置
 
     # 衣内温度：data[3..4] 16-bit Little-Endian，单位 0.1°C
     temp = (_u8(data[4]) << 8 | _u8(data[3])) / 10.0

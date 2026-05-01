@@ -23,10 +23,12 @@
   "ble_connect_timeout_s":  15,
   "ble_poll_interval_s":    2,
   "ble_reconnect_delay_s":  10,
+  "ble_health_timeout_s":   10,
 
   "_alerts": "── 告警行为 / Alerts / アラート設定 ──",
-  "prone_alert_cooldown_s": 300,
-  "feed_repeat_s":          1800,
+  "prone_alert_threshold_s": 30,
+  "prone_alert_cooldown_s":  300,
+  "feed_repeat_s":           1800,
 
   "_notifications": "── 通知推送 / Notifications / 通知設定 ──",
   "discord_token":          "",

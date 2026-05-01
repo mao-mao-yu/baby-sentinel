@@ -868,7 +868,7 @@ video {
         <a href="/playback" style="text-decoration:none">
           <button style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;white-space:nowrap">📹 回放</button>
         </a>
-        <a id="nav-manager" href="#" target="_blank" style="text-decoration:none">
+        <a id="nav-manager" href="#" style="text-decoration:none">
           <button style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;white-space:nowrap">🛠 管理</button>
         </a>
       </div>
@@ -883,7 +883,7 @@ video {
       <button class="tab-btn" id="tab-monitor" onclick="switchTab('monitor')">📹 监控</button>
       <button class="tab-btn active" id="tab-baby" onclick="switchTab('baby')">🍼 育儿</button>
       <a href="/playback" class="tab-btn">📼 回放</a>
-      <a id="tab-manager" href="#" class="tab-btn" target="_blank">🛠 管理</a>
+      <a id="tab-manager" href="#" class="tab-btn">🛠 管理</a>
     </div>
 
     <!-- 左侧面板：视频 + 传感器监控（手机默认隐藏）-->
@@ -2089,6 +2089,13 @@ function renderTodayLog(entries, scrollToTs = null) {
     return;
   }
 
+  // 渲染前快照滚动状态：用于重渲染后恢复，避免 baby_stats 广播打断用户阅读
+  const prevScrollTop    = list.scrollTop;
+  const prevScrollHeight = list.scrollHeight;
+  const prevClientHeight = list.clientHeight;
+  const wasAtBottom = prevScrollHeight > 0 &&
+                      (prevScrollHeight - prevScrollTop - prevClientHeight) < 30;
+
   // 用 DocumentFragment 批量构建后一次性插入，减少重排次数
   const frag = document.createDocumentFragment();
   const sorted = [...entries].sort((a, b) => (a.ts || 0) - (b.ts || 0));
@@ -2108,7 +2115,15 @@ function renderTodayLog(entries, scrollToTs = null) {
 
   list.innerHTML = '';
   list.appendChild(frag);
-  if (scrollTarget) scrollTarget.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+  // 滚动位置恢复，优先级：① 显式 scrollToTs ② 之前在底部 ③ 保持原 scrollTop
+  if (scrollTarget) {
+    scrollTarget.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  } else if (wasAtBottom) {
+    list.scrollTop = list.scrollHeight;
+  } else {
+    list.scrollTop = prevScrollTop;
+  }
 }
 
 // ── Date nav init & midnight check ───────

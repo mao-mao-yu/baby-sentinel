@@ -1,7 +1,9 @@
 """育儿日志模块 — 喂奶 / 尿布 / 睡眠 / 体温 / 身高体重 记录 + 统计
 
 存储后端：SQLite (logs/baby_log.db)
-向前兼容：模块加载时自动从旧 logs/baby_log.json 迁入，原文件备份为 .bak
+
+如有旧 logs/baby_log.json 需要导入，运行：
+    ./venv/bin/python tools/migrate_baby_log.py
 """
 
 import json
@@ -13,9 +15,8 @@ from datetime import date, datetime, timedelta
 
 from app.config import BASE_DIR, CFG, log
 
-LOG_DIR   = os.path.join(BASE_DIR, "logs")
-DB_FILE   = os.path.join(LOG_DIR, "baby_log.db")
-JSON_FILE = os.path.join(LOG_DIR, "baby_log.json")  # 旧文件，迁移后改名为 .bak
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+DB_FILE = os.path.join(LOG_DIR, "baby_log.db")
 
 # 所有喂奶类型（含旧的 "feed" 兼容）
 FEED_TYPES = {"feed", "formula", "breastfeed", "bottle_milk"}
@@ -78,64 +79,8 @@ def _entry_to_row(entry: dict, date_key: str) -> tuple:
     )
 
 
-# ── JSON → SQLite 一次性迁移 ──────────────────────────────────────────
-
-def _migrate_from_json() -> None:
-    if not os.path.exists(JSON_FILE):
-        return
-    with _connect() as conn:
-        existing = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
-    if existing > 0:
-        return  # DB 已有数据，不再覆盖
-
-    try:
-        with open(JSON_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:
-        log.warning(f"[BabyLog] 读取旧 JSON 失败，跳过迁移: {e}")
-        return
-
-    # 旧数据可能存在 ts 重复（历史 bug），迁移时按 add_entry 的规则 +1 去重
-    rows: list = []
-    used_ts: set = set()
-    bumped = 0
-    for date_key, entries in (data or {}).items():
-        if not isinstance(entries, list):
-            continue
-        for e in entries:
-            try:
-                ts = int(e.get("ts", 0))
-                while ts in used_ts:
-                    ts += 1
-                    bumped += 1
-                used_ts.add(ts)
-                e_copy = {**e, "ts": ts}
-                rows.append(_entry_to_row(e_copy, date_key))
-            except Exception as ex:
-                log.warning(f"[BabyLog] 跳过损坏条目: {e} ({ex})")
-
-    if not rows:
-        return
-
-    with _db_lock, _connect() as conn:
-        conn.executemany(
-            "INSERT INTO entries (ts, date, type, time, action, payload) VALUES (?,?,?,?,?,?)",
-            rows,
-        )
-        conn.commit()
-
-    suffix = f"（{bumped} 条因 ts 重复已自动 +1 去重）" if bumped else ""
-    backup = JSON_FILE + ".bak"
-    try:
-        os.replace(JSON_FILE, backup)
-        log.info(f"[BabyLog] 已迁移 {len(rows)} 条 JSON 数据 → SQLite{suffix}，原文件备份至 {backup}")
-    except Exception:
-        log.info(f"[BabyLog] 已迁移 {len(rows)} 条 JSON 数据 → SQLite{suffix}")
-
-
-# 模块加载时初始化 + 自动迁移（只跑一次）
+# 模块加载时初始化 schema
 _init_db()
-_migrate_from_json()
 
 
 # ── 公共查询 API ──────────────────────────────────────────────────────
@@ -156,9 +101,10 @@ def get_date_entries(date_str: str) -> list:
         )]
 
 
-# ── 兼容旧 _load() / _save() 接口 ────────────────────────────────────
-# 保留 dict-of-lists 形态供原业务函数使用，业务逻辑零改动；
-# 写入时 _save() 走全量重写（247 条规模性能 OK，几千条仍可接受）。
+# ── dict-of-lists 桥接 ───────────────────────────────────────────────
+# 业务函数（add_entry/update_entry/delete_entry/get_stats）需要遍历整本日志
+# 来处理跨日睡眠等场景，这里保留 _load/_save 提供 dict-of-lists 视图。
+# _save 走全量重写：当前数据规模（百~千条）性能足够。
 
 def _load() -> dict:
     out: dict = {}
@@ -183,7 +129,7 @@ def _save(data: dict) -> None:
         conn.commit()
 
 
-# ── 业务逻辑（与旧版 JSON 实现完全一致）──────────────────────────────
+# ── 业务逻辑 ──────────────────────────────────────────────────────────
 
 def _today() -> str:
     return date.today().isoformat()

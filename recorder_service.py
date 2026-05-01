@@ -158,6 +158,7 @@ async def camera_record_loop() -> None:
                 "-segment_list", idx_path,
                 "-segment_list_type", "csv",
                 "-segment_list_flags", "+cache",
+                "-reset_timestamps", "1",   # 每段 PTS 从 0 开始，避免播放器把累积 PTS 当时长
                 "-strftime", "1",
                 out_pat,
                 stdout=asyncio.subprocess.DEVNULL,
