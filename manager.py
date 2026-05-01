@@ -34,6 +34,14 @@ with open(CONFIG_FILE, encoding="utf-8") as _f:
 
 MANAGER_PORT = CFG.get("manager_port", 9091)
 _GO2RTC_EXE  = "go2rtc.exe" if sys.platform == "win32" else "go2rtc"
+
+# 子进程组隔离：Unix 用 setsid（new session），Windows 用 CREATE_NEW_PROCESS_GROUP，
+# 让 _kill_tree 能干净地把整棵子进程树带走，且 manager 收到 Ctrl+C 不会直接传给子进程
+_PROC_GROUP_KW: dict = (
+    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    if sys.platform == "win32"
+    else {"start_new_session": True}
+)
 _go2rtc_p    = CFG.get("go2rtc_path", "").strip()
 if _go2rtc_p:
     GO2RTC_BIN = _go2rtc_p if os.path.isabs(_go2rtc_p) else os.path.join(BASE_DIR, _go2rtc_p)
@@ -166,7 +174,7 @@ async def _do_start(svc: str):
             cwd=BASE_DIR,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,   # 新进程组，killpg 可以整树杀死
+            **_PROC_GROUP_KW,
         )
         _procs[svc]  = proc
         _starts[svc] = time.time()
