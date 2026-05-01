@@ -26,14 +26,19 @@
   "ble_health_timeout_s":   10,
 
   "_alerts": "── 告警行为 / Alerts / アラート設定 ──",
-  "prone_alert_threshold_s": 30,
-  "prone_alert_cooldown_s":  300,
-  "feed_repeat_s":           1800,
+  "prone_alert_threshold_s":     30,
+  "prone_alert_cooldown_s":      300,
+  "breath_alert_threshold_rate": 8,
+  "breath_alert_duration_s":     20,
+  "breath_alert_cooldown_s":     300,
+  "feed_repeat_s":               1800,
 
   "_notifications": "── 通知推送 / Notifications / 通知設定 ──",
   "discord_token":          "",
   "discord_channel_ids":    [],
   "discord_user_ids":       [],
+  "bark_server_url":        "https://api.day.app",
+  "bark_keys":              [],
 
   "_misc": "── 其他 / Misc / その他 ──",
   "log_level":              "INFO",

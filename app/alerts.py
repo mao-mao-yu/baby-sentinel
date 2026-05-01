@@ -23,6 +23,16 @@ async def notify_discord(message: str, level: str = "warning") -> None:
     )
 
 
+async def notify_bark(message: str, level: str = "warning") -> None:
+    from notify.bark_send import send_bark
+    keys   = CFG.get("bark_keys", [])
+    server = CFG.get("bark_server_url", "https://api.day.app")
+    if not keys:
+        return
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, send_bark, server, keys, message, level)
+
+
 async def trigger_alert(message: str, level: str = "warning") -> None:
     """触发告警：写日志 + 广播 WebSocket + 分发通知渠道"""
     entry = {
@@ -37,3 +47,4 @@ async def trigger_alert(message: str, level: str = "warning") -> None:
     await broadcast(entry)
     await notify_qq(message)
     await notify_discord(message, level)
+    await notify_bark(message, level)
