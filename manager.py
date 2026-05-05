@@ -23,6 +23,7 @@ from datetime import datetime
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # ── 配置 ──────────────────────────────────────────────────────────────
 
@@ -67,6 +68,9 @@ SERVICES: dict[str, dict] = {
         "cmd":        [GO2RTC_BIN, "-config", "go2rtc.yaml"],
         "pre_start":  _gen_go2rtc_yaml,
         "port":       CFG.get("go2rtc_port", 1984),
+        # adoptable: manager 重启时不杀 → recorder 的 ffmpeg 不会因 RTSP 断流退出
+        "adoptable":  True,
+        "script":     "bin/go2rtc",
     },
     "ble": {
         "name":       "BLE Sensor",
@@ -88,6 +92,9 @@ SERVICES: dict[str, dict] = {
         "desc":       "视频录制 · 传感器时序存档",
         "cmd":        [sys.executable, "-u", "recorder_service.py"],
         "port":       None,
+        # adoptable: manager 启动时若已有同名进程在跑就直接接管而不杀，避免录像中断
+        "adoptable":  True,
+        "script":     "recorder_service.py",
     },
 }
 
@@ -130,7 +137,83 @@ async def _drain(svc: str, pipe):
         pass
 
 
+class _AdoptedProc:
+    """被 manager 接管的孤儿进程（不是我们 spawn 的，但仍能 kill / wait）。
+    stdout 不可用——孤儿的输出我们读不到，UI 上看不到接管期间的日志。"""
+
+    def __init__(self, pid: int):
+        self.pid = pid
+        self.returncode: int | None = None
+        self.stdout = None  # 让 _drain 路径跳过
+
+    async def wait(self):
+        while self.returncode is None:
+            try:
+                os.kill(self.pid, 0)   # 探活
+            except ProcessLookupError:
+                self.returncode = 0
+                break
+            await asyncio.sleep(1)
+        return self.returncode
+
+    def kill(self):
+        try:
+            import signal as _sig
+            os.kill(self.pid, _sig.SIGKILL)
+        except ProcessLookupError:
+            pass
+        self.returncode = -9
+
+    def terminate(self):
+        try:
+            import signal as _sig
+            os.kill(self.pid, _sig.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
+def _find_external_proc(svc: str) -> int | None:
+    """寻找 cwd 在项目目录、cmdline 含 SERVICES[svc]['script'] 的 PPID=1 进程。
+    跳过 manager 自己的子进程；返回 PID 或 None。Windows 暂不支持。"""
+    if sys.platform == "win32":
+        return None
+    script = SERVICES[svc].get("script")
+    if not script:
+        return None
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-f", script],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        )
+    except Exception:
+        return None
+    me = os.getpid()
+    base = BASE_DIR.replace("\\", "/").lower()
+    managed_pids = {p.pid for p in _procs.values() if p}
+    for pid_str in out.split():
+        try:
+            pid = int(pid_str)
+        except ValueError:
+            continue
+        if pid == me or pid in managed_pids:
+            continue
+        if _get_proc_cwd(pid).replace("\\", "/").lower() != base:
+            continue
+        return pid
+    return None
+
+
 async def _do_start(svc: str):
+    # adoptable 服务：启动前先看是否有外部同名进程能接管，避免重启杀掉正在工作的进程
+    if SERVICES[svc].get("adoptable") and _procs[svc] is None:
+        existing = _find_external_proc(svc)
+        if existing is not None:
+            _procs[svc]  = _AdoptedProc(existing)
+            _starts[svc] = time.time()
+            _append_log(svc, f"{'─'*40}")
+            _append_log(svc, f"接管已运行的进程 PID {existing}（避免中断）")
+            return
+
     await _do_stop(svc)
 
     # ── 端口自检 ──────────────────────────────────────────────────
@@ -295,9 +378,17 @@ async def _do_stop(svc: str):
 
 def _scan_and_kill_orphans() -> None:
     """启动前扫描同项目残留的孤儿子进程并整组干掉（PPID=1, cwd 在项目目录下）。
-    适用于没监听端口的服务（如 recorder_service.py），端口自检无法发现它们。"""
+    adoptable 的服务（如 recorder_service.py）跳过——它们的孤儿留给 _do_start 接管，
+    避免杀掉正在录像的进程导致 mp4 文件损坏。"""
     if sys.platform == "win32":
         return
+
+    # 收集 adoptable 服务对应的脚本名，扫描时跳过
+    adoptable_scripts = {
+        defn.get("script") for defn in SERVICES.values()
+        if defn.get("adoptable") and defn.get("script")
+    }
+
     try:
         out = subprocess.check_output(
             ["pgrep", "-f", "ble_service.py|recorder_service.py|server.py"],
@@ -325,8 +416,12 @@ def _scan_and_kill_orphans() -> None:
             continue
         if _get_proc_cwd(pid).replace("\\", "/").lower() != base:
             continue
-        cmdline = _get_proc_cmdline(pid)[:100]
-        print(f"[manager] 清理孤儿 PID {pid}: {cmdline}")
+        cmdline = _get_proc_cmdline(pid)
+        # adoptable 进程：留给 _do_start 接管
+        if any(s in cmdline for s in adoptable_scripts):
+            print(f"[manager] 跳过 adoptable 进程 PID {pid}: {cmdline[:80]}（将被接管）")
+            continue
+        print(f"[manager] 清理孤儿 PID {pid}: {cmdline[:100]}")
         try:
             _kill_tree(pid)
         except Exception:
@@ -342,7 +437,13 @@ async def _lifespan(_: FastAPI):
     try:
         yield
     finally:
+        # adoptable 服务（如 recorder）保留运行——下次 manager 启动时接管，避免录像中断
         for svc in ("recorder", "server", "ble", "go2rtc"):
+            if SERVICES[svc].get("adoptable"):
+                proc = _procs.get(svc)
+                if proc and proc.returncode is None:
+                    _append_log(svc, "manager 退出（保留进程供下次接管，录像不中断）")
+                continue
             try:
                 await _do_stop(svc)
             except Exception as e:
@@ -350,8 +451,11 @@ async def _lifespan(_: FastAPI):
 
 
 def _cleanup_at_exit():
-    """兜底：lifespan 未执行（异常退出 / debugger 强停）时同步清理子进程组。"""
-    for proc in _procs.values():
+    """兜底：lifespan 未执行（异常退出 / debugger 强停）时同步清理子进程组。
+    adoptable 服务跳过——让录像 ffmpeg 留下，下次 manager 启动接管。"""
+    for svc, proc in _procs.items():
+        if SERVICES[svc].get("adoptable"):
+            continue
         if proc and proc.returncode is None:
             try:
                 _kill_tree(proc.pid)
@@ -363,12 +467,18 @@ atexit.register(_cleanup_at_exit)
 
 
 app = FastAPI(title="BabySentinel Manager", lifespan=_lifespan)
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+
+# 静态资源版本号——manager 启动时一次确定，强制浏览器跳过旧 cache
+_CFG_VER = str(int(time.time()))
 
 
 @app.get("/")
 async def index():
     with open(os.path.join(BASE_DIR, "static", "manager.html"), encoding="utf-8") as f:
-        html = f.read().replace("__WEB_PORT__", str(CFG.get("web_port", 8080)))
+        html = (f.read()
+                .replace("__WEB_PORT__", str(CFG.get("web_port", 8080)))
+                .replace("__CFG_VER__", _CFG_VER))
     return HTMLResponse(html)
 
 

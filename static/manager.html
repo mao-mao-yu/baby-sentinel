@@ -18,7 +18,12 @@
   --radius:  10px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+body {
+  background: var(--bg); color: var(--text); font-family: system-ui, sans-serif;
+  height: 100vh;
+  height: 100dvh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
 
 header {
   padding: 12px 20px; background: var(--card);
@@ -96,6 +101,7 @@ header h1 { font-size: 1rem; font-weight: 600; flex: 1; }
   body {
     height: auto;
     min-height: 100vh;
+    min-height: 100dvh;
     overflow: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -125,14 +131,29 @@ header h1 { font-size: 1rem; font-weight: 600; flex: 1; }
 <body>
 
 <header>
-  <h1>🛠 BabySentinel Manager</h1>
-  <a class="header-link" id="link-main" href="#">→ 主界面</a>
-  <a class="header-link" id="link-playback" href="#">→ 回放</a>
+  <h1 data-i18n="mgrTitle">🛠 BabySentinel Manager</h1>
+  <a class="header-link" id="link-main" href="#" data-i18n="mgrLinkMain">→ 主界面</a>
+  <a class="header-link" id="link-playback" href="#" data-i18n="mgrLinkPlayback">→ 回放</a>
 </header>
 
 <div class="grid" id="grid"></div>
 
+<!-- LANGS 字典 -->
+<script src="/static/config.js?v=__CFG_VER__"></script>
+
 <script>
+const lang = navigator.language.startsWith('ja') ? 'ja' : 'zh';
+// 用 Proxy 兜底：缺失的 key 返回空字符串，避免在模板拼接出 "undefined"
+const T = new Proxy(LANGS[lang], { get: (obj, k) => obj[k] ?? '' });
+
+function applyI18n(root) {
+  (root || document).querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    if (LANGS[lang][key] !== undefined) el.textContent = LANGS[lang][key];
+  });
+}
+applyI18n();
+
 (function() {
   const base = `http://${location.hostname}:__WEB_PORT__`;
   document.getElementById('link-main').href     = base + '/';
@@ -153,7 +174,9 @@ function renderCard(svc, data) {
 
   const st    = data.status;
   const dotCl = st === 'running' ? 'running' : st === 'crashed' ? 'crashed' : 'stopped';
-  const stLbl = st === 'running' ? '运行中' : st === 'crashed' ? '已崩溃' : '已停止';
+  const stLbl = st === 'running' ? T.mgrStatusRunning
+              : st === 'crashed' ? T.mgrStatusCrashed
+                                 : T.mgrStatusStopped;
 
   el.querySelector('.dot').className        = `dot ${dotCl}`;
   el.querySelector('.status-text').className  = `status-text ${dotCl}`;
@@ -201,15 +224,15 @@ function buildCard(svc, meta) {
         <div class="card-desc">${escHtml(meta.desc || '—')}</div>
         <div class="status-row">
           <div class="dot stopped"></div>
-          <span class="status-text stopped">已停止</span>
+          <span class="status-text stopped">${T.mgrStatusStopped}</span>
           <span class="pid-text"></span>
         </div>
       </div>
     </div>
     <div class="card-btns">
-      <button class="btn start"   onclick="action('${svc}','start')">▶ 启动</button>
-      <button class="btn stop"    onclick="action('${svc}','stop')">■ 停止</button>
-      <button class="btn restart" onclick="action('${svc}','restart')">↺ 重启</button>
+      <button class="btn start"   onclick="action('${svc}','start')">${T.mgrBtnStart}</button>
+      <button class="btn stop"    onclick="action('${svc}','stop')">${T.mgrBtnStop}</button>
+      <button class="btn restart" onclick="action('${svc}','restart')">${T.mgrBtnRestart}</button>
     </div>
     <div class="log-box"></div>
   `;

@@ -10,12 +10,14 @@ import websockets
 
 from notify._http import request_async as _http
 
+from app.i18n import t, posture_label
+
 log = logging.getLogger("BabySentinel")
 
 _GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 _COMMANDS = [
-    {"name": "get_babystatus", "description": "查看宝宝实时传感器状态", "type": 1},
+    {"name": "get_babystatus", "description": t("discord_cmd_desc"), "type": 1},
 ]
 
 
@@ -25,22 +27,19 @@ def _parse_app_id(token: str) -> str:
     return base64.b64decode(seg).decode()
 
 
-_POSTURE_JA = {"仰卧": "仰向け", "俯卧": "うつ伏せ", "左侧卧": "左向き", "右侧卧": "右向き", "坐姿": "お座り"}
-
-
 def _fmt_status(s: dict) -> str:
-    lines = [f"{'🟢' if s.get('ble_ok') else '🔴'} BLE {'接続中' if s.get('ble_ok') else '未接続'}"]
+    ble_label = t("discord_ble_on") if s.get("ble_ok") else t("discord_ble_off")
+    lines = [f"{'🟢' if s.get('ble_ok') else '🔴'} BLE {ble_label}"]
     if s.get("posture"):
-        posture_ja = _POSTURE_JA.get(s["posture"], s["posture"])
-        lines.append(f"🤸 姿勢: {posture_ja}")
+        lines.append(t("discord_posture", value=posture_label(s["posture"])))
     if s.get("breath_rate") is not None:
-        lines.append(f"💨 呼吸: {s['breath_rate']} 回/分")
+        lines.append(t("discord_breath", rate=s["breath_rate"]))
     if s.get("temperature") is not None:
-        lines.append(f"🌡️ 体温: {s['temperature']} °C")
+        lines.append(t("discord_temp", value=s["temperature"]))
     if s.get("battery") is not None:
         icon = "🔋" if s["battery"] > 20 else "🪫"
-        lines.append(f"{icon} バッテリー: {s['battery']}%")
-    lines.append(f"🕐 更新: {s.get('last_update') or '—'}")
+        lines.append(t("discord_battery", icon=icon, value=s["battery"]))
+    lines.append(t("discord_update", value=s.get("last_update") or "—"))
     return "\n".join(lines)
 
 
@@ -111,7 +110,7 @@ class GatewayClient:
         await _http(self.token, "POST",
                     f"/interactions/{d['id']}/{d['token']}/callback",
                     {"type": 4, "data": {
-                        "embeds": [{"title": "👶 赤ちゃんのリアルタイム状態",
+                        "embeds": [{"title": t("discord_title"),
                                     "description": _fmt_status(self.get_state()),
                                     "color": 0x5865F2}],
                     }})

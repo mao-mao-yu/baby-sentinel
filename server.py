@@ -15,7 +15,10 @@ from app.state import active_ws, sensor_state
 import app.state as state
 import app.camera as camera
 import app.baby_log as baby_log
+import app.sensors_db as sensors_db
+from app.video_util import is_complete_mp4
 from app.alerts import trigger_alert
+from app.i18n import t
 from notify.discord_bot import GatewayClient
 
 # BLE 字段由 ble_service.py 进程管理，通过 /api/internal/sensor 推送过来
@@ -41,7 +44,8 @@ async def _ble_health_loop():
         elapsed = time.time() - _last_ble_push_at
         if elapsed > _BLE_HEALTH_TIMEOUT and sensor_state.get("ble_ok"):
             sensor_state["ble_ok"] = False
-            log.warning(f"[Server] BLE 心跳超时 ({elapsed:.0f}s)，标记未连接")
+            state.clear_ble_data()
+            log.warning(f"[Server] BLE 心跳超时 ({elapsed:.0f}s)，标记未连接 + 清空传感器字段")
             await state.broadcast({"type": "sensor", **sensor_state})
 
 
@@ -84,8 +88,9 @@ async def _feed_reminder_loop():
 
             h = int(elapsed_s // 3600)
             m = int((elapsed_s % 3600) // 60)
-            elapsed_str = f"{h}時間{m}分" if h else f"{m}分"
-            msg = f"🍼 授乳の時間です\n最後の授乳から {elapsed_str} が経過しています。\n結葵ちゃんの授乳をお忘れなく 💕"
+            duration = t("duration_h_m", h=h, m=m) if h else t("duration_m", m=m)
+            name     = CFG.get("baby", {}).get("name", "")
+            msg      = t("alert_feed", duration=duration, name=name)
 
             await trigger_alert(msg, "warning")
             await state.broadcast({"type": "baby_stats", **baby_log.get_stats()})
@@ -120,6 +125,9 @@ app = FastAPI(lifespan=_lifespan, title="BabySentinel")
 app.mount("/static",      StaticFiles(directory=_os.path.join(BASE_DIR, "static")), name="static")
 app.mount("/recordings",  StaticFiles(directory=REC_DIR),                           name="recordings")
 
+# 静态资源版本号——server 启动时一次确定，强制浏览器跳过旧 cache
+_CFG_VER = str(int(time.time()))
+
 
 @app.websocket("/ws")
 async def ws_handler(websocket: WebSocket):
@@ -144,7 +152,9 @@ async def ws_handler(websocket: WebSocket):
 @app.get("/")
 async def root():
     with open(_os.path.join(BASE_DIR, "static", "index.html"), encoding="utf-8") as f:
-        html = f.read().replace("__MANAGER_PORT__", str(CFG.get("manager_port", 9091)))
+        html = (f.read()
+                .replace("__MANAGER_PORT__", str(CFG.get("manager_port", 9091)))
+                .replace("__CFG_VER__", _CFG_VER))
     return HTMLResponse(html)
 
 
@@ -241,7 +251,15 @@ async def post_sensor_refresh():
 @app.get("/playback")
 async def playback_page():
     with open(_os.path.join(BASE_DIR, "static", "playback.html"), encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+        return HTMLResponse(f.read().replace("__CFG_VER__", _CFG_VER))
+
+
+@app.get("/api/config/public")
+async def get_public_config():
+    """暴露给前端的少量只读配置项（避免泄漏密码 / RTSP URL 等敏感字段）。"""
+    return JSONResponse({
+        "ble_poll_interval_s":   CFG.get("ble_poll_interval_s", 2),
+    })
 
 
 @app.get("/api/recordings")
@@ -284,9 +302,27 @@ async def get_recording_segments(date: str):
         except Exception:
             pass
 
+    # 跳过正在录制的最新片段：当天 + 最新一个 mp4 + mtime 还在最近 segment_s 内
+    # （ffmpeg 还没 close mp4 → 缺 trailer/moov atom，点开会播放失败）
+    mp4_files = sorted(f for f in _os.listdir(vid_dir) if f.endswith(".mp4"))
+    today_str = _dt.now().strftime("%Y-%m-%d")
+    in_progress: set[str] = set()
+    if mp4_files and date == today_str:
+        last = mp4_files[-1]
+        try:
+            mtime = _os.path.getmtime(_os.path.join(vid_dir, last))
+            if (time.time() - mtime) < CFG.get("segment_s", 360):
+                in_progress.add(last)
+        except OSError:
+            in_progress.add(last)
+
     segments = []
-    for f in sorted(_os.listdir(vid_dir)):
-        if not f.endswith(".mp4"):
+    for f in mp4_files:
+        if f in in_progress:
+            continue
+        full = _os.path.join(vid_dir, f)
+        # 残缺/截断的 mp4（缺 moov atom）不展示在 timeline，浏览器点了也播不了
+        if not is_complete_mp4(full):
             continue
         if f in pts_map:
             ts = int(pts_map[f])
@@ -303,19 +339,7 @@ async def get_recording_segments(date: str):
 @app.get("/api/recordings/{date}/sensors")
 async def get_recording_sensors(date: str):
     """返回指定日期的传感器时序数据（JSON 数组）。"""
-    path = _os.path.join(REC_DIR, date, "sensors.jsonl")
-    if not _os.path.exists(path):
-        return JSONResponse([])
-    rows = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    rows.append(json.loads(line))
-                except Exception:
-                    pass
-    return JSONResponse(rows)
+    return JSONResponse(sensors_db.get_by_date(date))
 
 
 if __name__ == "__main__":

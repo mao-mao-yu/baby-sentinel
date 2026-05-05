@@ -8,8 +8,9 @@ from typing import Optional
 from bleak import BleakClient, BleakScanner
 
 from app.config import CFG, CODE_FILE, log
-from app.state import sensor_state, broadcast
+from app.state import sensor_state, broadcast, clear_ble_data
 from app.alerts import trigger_alert
+from app.i18n import t
 
 # ── BLE 协议常量 ──────────────────────────────────────────────────────
 
@@ -64,8 +65,6 @@ async def parse_baby_data(data: bytes) -> None:
     if len(data) < 11:
         return
 
-    is_wearing = (_u8(data[10]) == 0x81)   # 仅用于过滤未戴时的呼吸误报，不进 sensor_state
-
     # 姿势：data[2] 单字节，0=仰 1=俯 2=左 3=右 4=坐
     posture_id = _u8(data[2])
     if posture_id in _POSTURES:
@@ -85,10 +84,7 @@ async def parse_baby_data(data: bytes) -> None:
         cooldown  = CFG.get("prone_alert_cooldown_s", 300)
         if elapsed >= threshold and (now - _last_prone_alert) > cooldown:
             _last_prone_alert = now
-            await trigger_alert(
-                f"🚨 うつ伏せ警告\n{int(elapsed)} 秒間うつ伏せの状態が続いています。すぐに確認してください。",
-                "danger",
-            )
+            await trigger_alert(t("alert_prone", seconds=int(elapsed)), "danger")
     else:
         _prone_since = 0   # 切回非俯卧 → 计时重置
 
@@ -105,19 +101,20 @@ async def parse_baby_data(data: bytes) -> None:
         sensor_state["breath_rate"] = rate
         log.debug(f"[BLE] 呼吸频率: {rate} 次/min")
 
-        # 呼吸停止 / 过低告警：必须贴身 + 持续 ≥ duration 秒，且距上次报警 > cooldown
+        # 呼吸停止 / 过低告警：持续 ≥ duration 秒 + cooldown
+        # 注意：不区分贴身——设备未戴时 rate 也常为 0，会触发告警（这是用户要求的"奇怪数据就提醒"）
         threshold_rate = CFG.get("breath_alert_threshold_rate", 8)
         threshold_dur  = CFG.get("breath_alert_duration_s", 20)
         breath_cd      = CFG.get("breath_alert_cooldown_s", 300)
         now_b = time.time()
-        if is_wearing and rate < threshold_rate:
+        if rate < threshold_rate:
             if _low_breath_since == 0:
                 _low_breath_since = now_b
             elapsed_b = now_b - _low_breath_since
             if elapsed_b >= threshold_dur and (now_b - _last_breath_alert) > breath_cd:
                 _last_breath_alert = now_b
                 await trigger_alert(
-                    f"🫁 呼吸異常警告\n呼吸数 {rate} 回/分の状態が {int(elapsed_b)} 秒続いています。すぐに確認してください。",
+                    t("alert_breath", rate=rate, seconds=int(elapsed_b)),
                     "danger",
                 )
         else:
@@ -166,6 +163,7 @@ async def loop() -> None:
 
         log.debug(f"[BLE] 扫描 {addr}...")
         sensor_state.update(ble_ok=False)
+        clear_ble_data()
         await broadcast({"type": "sensor", **sensor_state})
 
         try:
@@ -292,6 +290,7 @@ async def loop() -> None:
             log.warning(f"[BLE] 错误: {type(e).__name__}: {e}")
 
         sensor_state.update(ble_ok=False)
+        clear_ble_data()
         await broadcast({"type": "sensor", **sensor_state})
         delay = CFG.get("ble_reconnect_delay_s", 10)
         log.debug(f"[BLE] {delay} 秒后重连...")

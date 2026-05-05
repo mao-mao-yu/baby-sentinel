@@ -148,9 +148,10 @@ def _parse_birth_date(s: str):
 
 
 def _fmt_duration(seconds: int) -> str:
+    from app.i18n import t
     h, m = divmod(abs(seconds), 3600)
     m = m // 60
-    return f"{h}時間{m}分" if h else f"{m}分"
+    return t("duration_h_m", h=h, m=m) if h else t("duration_m", m=m)
 
 
 def _find_open_sleep_start(entries: list, before_ts: int | None = None) -> dict | None:

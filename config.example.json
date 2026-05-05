@@ -16,12 +16,11 @@
 
   "_recording": "── 录像 / Recording / 録画設定 ──",
   "segment_s":              180,
-  "sensor_interval_s":      5,
 
   "_ble": "── 蓝牙时序 / BLE Timing / BLE接続タイミング ──",
   "ble_scan_timeout_s":     20,
   "ble_connect_timeout_s":  15,
-  "ble_poll_interval_s":    2,
+  "ble_poll_interval_s":    1,
   "ble_reconnect_delay_s":  10,
   "ble_health_timeout_s":   10,
 
@@ -42,9 +41,11 @@
 
   "_misc": "── 其他 / Misc / その他 ──",
   "log_level":              "INFO",
+  "language":               "ja",
 
   "_baby": "── 宝宝信息 / Baby Profile / ベビー情報 ──",
   "baby": {
+    "name":                  "赤ちゃん",
     "birth_date":            "YYYYMMDD",
     "weight_g":              0,
     "feed_type":             "formula",

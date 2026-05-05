@@ -20,14 +20,20 @@ import os
 import shutil
 import time
 import urllib.request
-from datetime import date, datetime
+from datetime import date
 
+from app import sensors_db
 from app.config import BASE_DIR, CFG, REC_DIR, log
+from app.video_util import is_complete_mp4
 
 # ── 配置 ──────────────────────────────────────────────────────────────
 
-SEGMENT_S      = CFG.get("segment_s", 180)
-SENSOR_INTVL_S = CFG.get("sensor_interval_s", 5)
+SEGMENT_S  = CFG.get("segment_s", 180)
+# 传感器写入与 BLE 轮询同频，每次成功轮询都落库
+BLE_POLL_S = CFG.get("ble_poll_interval_s", 2)
+# 残缺 mp4 清理：每 10 分钟扫一遍；mtime 早于这个阈值且无 moov 的视为崩溃残留
+CLEANUP_INTERVAL_S      = 600
+CLEANUP_AGE_THRESHOLD_S = max(SEGMENT_S * 2, 300)
 
 # ── 工具函数 ──────────────────────────────────────────────────────────
 
@@ -89,27 +95,69 @@ async def _terminate_proc(proc: asyncio.subprocess.Process, name: str = "proc",
 async def sensor_record_loop() -> None:
     port = CFG.get("web_port", 8080)
     url  = f"http://127.0.0.1:{port}/api/sensor"
-    log.info("[Sensor] 传感器记录启动")
+    log.info(f"[Sensor] 传感器记录启动 (interval={BLE_POLL_S}s, db=logs/sensors.db)")
 
     while True:
-        await asyncio.sleep(SENSOR_INTVL_S)
+        await asyncio.sleep(BLE_POLL_S)
         s = _http_get(url)
         if not s or not s.get("ble_ok"):
             continue
         try:
-            path = os.path.join(_day_dir(), "sensors.jsonl")
-            entry = {
-                "ts":          int(time.time()),
-                "time":        datetime.now().strftime("%H:%M:%S"),
-                "breath_rate": s.get("breath_rate"),
-                "temperature": s.get("temperature"),
-                "posture":     s.get("posture"),
-                "battery":     s.get("battery"),
-            }
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            sensors_db.add_reading(
+                breath_rate=s.get("breath_rate"),
+                temperature=s.get("temperature"),
+                posture=s.get("posture"),
+                battery=s.get("battery"),
+            )
         except Exception as e:
             log.debug(f"[Sensor] 写入错误: {e}")
+
+
+# ── 残缺 mp4 清理 ─────────────────────────────────────────────────────
+
+def _cleanup_broken_mp4_once() -> int:
+    """扫描 REC_DIR 下所有 YYYY-MM-DD/video/*.mp4，删除"已老 + 缺 moov"的残段。
+    "已老" 用 mtime 判断，避开正在录制的当前段。返回删除文件数。"""
+    if not os.path.isdir(REC_DIR):
+        return 0
+    now = time.time()
+    deleted = 0
+    for d in os.listdir(REC_DIR):
+        if len(d) != 10:
+            continue
+        sub = os.path.join(REC_DIR, d, "video")
+        if not os.path.isdir(sub):
+            continue
+        for f in os.listdir(sub):
+            if not f.endswith(".mp4"):
+                continue
+            path = os.path.join(sub, f)
+            try:
+                mtime = os.path.getmtime(path)
+                if (now - mtime) < CLEANUP_AGE_THRESHOLD_S:
+                    continue   # 还很新，可能是当前正在写的段
+                if is_complete_mp4(path):
+                    continue
+                os.remove(path)
+                deleted += 1
+                log.info(f"[Cleanup] 删除残缺 mp4: {d}/{f}")
+            except OSError as e:
+                log.debug(f"[Cleanup] {d}/{f} 处理失败: {e}")
+    return deleted
+
+
+async def video_cleanup_loop() -> None:
+    log.info(f"[Cleanup] 残缺 mp4 清理循环启动 (每 {CLEANUP_INTERVAL_S}s, age>{CLEANUP_AGE_THRESHOLD_S}s)")
+    # 启动后等一小段时间再做第一次扫描，给 ffmpeg 留出从崩溃中恢复的窗口
+    await asyncio.sleep(60)
+    while True:
+        try:
+            n = _cleanup_broken_mp4_once()
+            if n:
+                log.info(f"[Cleanup] 本轮共删 {n} 个残缺片段")
+        except Exception as e:
+            log.warning(f"[Cleanup] 异常: {type(e).__name__}: {e}")
+        await asyncio.sleep(CLEANUP_INTERVAL_S)
 
 
 # ── 摄像头录像 ────────────────────────────────────────────────────────
@@ -199,6 +247,7 @@ async def main():
     await asyncio.gather(
         camera_record_loop(),
         sensor_record_loop(),
+        video_cleanup_loop(),
     )
 
 if __name__ == "__main__":

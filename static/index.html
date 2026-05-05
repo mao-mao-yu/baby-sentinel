@@ -269,6 +269,9 @@ video {
   font-weight: 700;
   line-height: 1;
   transition: color .3s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card-unit {
@@ -280,6 +283,9 @@ video {
   font-size: clamp(0.6rem, 1.6cqi, 0.72rem);
   color: var(--muted);
   margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Sensor cards (呼吸 / 体温 / 姿势) 居中填充布局 ── */
@@ -498,6 +504,13 @@ video {
   justify-content: space-around;
   padding: 2px 2px 4px;
   border-bottom: 1px solid var(--border);
+  /* 防止数字位数变化导致 span 文本换行：行高一旦跳变会让下方 list 抖动半条记录 */
+  white-space: nowrap;
+}
+.log-stats-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Log picker — unified fixed overlay */
@@ -806,11 +819,15 @@ video {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+  /* 禁用浏览器 scroll anchoring：DOM 任何变化都不自动调整 scrollTop */
+  overflow-anchor: none;
+  /* 阻止 iOS 滚动链传播到父容器，防止抖动 */
+  overscroll-behavior: contain;
 }
 .today-log-list::-webkit-scrollbar { width: 3px; }
 .today-log-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-/* 阻止 iOS 滚动链传播到父容器，防止抖动 */
-.today-log-list { overscroll-behavior: contain; }
+/* 子节点也禁用 anchoring（防止某些浏览器需要在子节点单独标记） */
+.today-entry { overflow-anchor: none; }
 
 .today-entry {
   display: flex;
@@ -866,10 +883,7 @@ video {
       <div class="clock" id="clock">--:--:--</div>
       <div class="header-nav">
         <a href="/playback" style="text-decoration:none">
-          <button style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;white-space:nowrap">📹 回放</button>
-        </a>
-        <a id="nav-manager" href="#" style="text-decoration:none">
-          <button style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;white-space:nowrap">🛠 管理</button>
+          <button data-i18n="pbTitle" style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;white-space:nowrap">📹 回放</button>
         </a>
       </div>
     </div>
@@ -880,10 +894,9 @@ video {
 
     <!-- Mobile tab bar -->
     <div class="mobile-tabs" id="mobile-tabs">
-      <button class="tab-btn" id="tab-monitor" onclick="switchTab('monitor')">📹 监控</button>
-      <button class="tab-btn active" id="tab-baby" onclick="switchTab('baby')">🍼 育儿</button>
-      <a href="/playback" class="tab-btn">📼 回放</a>
-      <a id="tab-manager" href="#" class="tab-btn">🛠 管理</a>
+      <button class="tab-btn" id="tab-monitor" onclick="switchTab('monitor')" data-i18n="mobTabMonitor">📹 监控</button>
+      <button class="tab-btn active" id="tab-baby" onclick="switchTab('baby')" data-i18n="mobTabBaby">🍼 育儿</button>
+      <a href="/playback" class="tab-btn" data-i18n="mobTabPlayback">📼 回放</a>
     </div>
 
     <!-- 左侧面板：视频 + 传感器监控（手机默认隐藏）-->
@@ -1067,7 +1080,7 @@ video {
 </div><!-- /layout -->
 
 <!-- 常数配置（LANGS / SENSOR_CFG / POSTURE_ICONS 等） -->
-<script src="/static/config.js"></script>
+<script src="/static/config.js?v=__CFG_VER__"></script>
 
 <script>
 const lang = navigator.language.startsWith('ja') ? 'ja' : 'zh';
@@ -1403,7 +1416,7 @@ function connectWs() {
         addAlert(msg);
       } else if (msg.type === 'baby_stats') {
         updateBabyStats(msg);
-        refreshTodayLog();
+        refreshTodayLog();   // 多设备同步：进 DOM diff 路径，不跳
       }
     } catch (e) {}
   };
@@ -1446,6 +1459,15 @@ function renderDateStats(entries) {
   let bottleCount = 0, bottleMl = 0, bfL = 0, bfR = 0;
   let wet = 0, dirty = 0, sleepMs = 0, sleepStart = null;
 
+  // 跨日睡眠分摊：用本日 00:00 / 次日 00:00 做边界
+  // 1) 起床在本日、入睡在前一日 → 从本日 00:00 起算
+  // 2) 入睡在本日、起床在后一日（或还没起） → 算到次日 00:00（今日封顶到 now）
+  const dayStartTs = new Date(viewingDate + 'T00:00:00').getTime() / 1000;
+  const dayEndTs   = dayStartTs + 86400;
+  const sleepUpper = (viewingDate === _sysToday)
+    ? Math.min(Date.now() / 1000, dayEndTs)
+    : dayEndTs;
+
   for (const e of entries) {
     if (e.type === 'formula' || e.type === 'bottle_milk') {
       bottleCount++; bottleMl += e.amount_ml || 0;
@@ -1457,10 +1479,17 @@ function renderDateStats(entries) {
     if (e.type === 'diaper') { if (e.kind === 'wet') wet++; else dirty++; }
     if (e.type === 'sleep') {
       if (e.action === 'start') sleepStart = e.ts;
-      else if (e.action === 'end' && sleepStart) {
-        sleepMs += (e.ts - sleepStart) * 1000; sleepStart = null;
+      else if (e.action === 'end') {
+        // 没匹配上的起床 → 入睡在前一天，本日份额从 00:00 起算
+        const startTs = sleepStart ?? dayStartTs;
+        sleepMs += Math.max(0, e.ts - startTs) * 1000;
+        sleepStart = null;
       }
     }
+  }
+  // 没匹配上的入睡 → 起床在后一天（或还在睡），本日份额算到 24:00（今天封顶 now）
+  if (sleepStart !== null) {
+    sleepMs += Math.max(0, sleepUpper - sleepStart) * 1000;
   }
 
   const sh = Math.floor(sleepMs / 3600000), sm = Math.floor(sleepMs % 3600000 / 60000);
@@ -1774,17 +1803,19 @@ function buildPoopPicker(body, getTime) {
   const colorState = { value: '黄' };
 
   const amtSeg = buildSegmented([
-    { label: T.poopAmtSmall, value: '少' },
-    { label: T.poopAmtNormal, value: '正常' },
-    { label: T.poopAmtLarge, value: '多' },
-  ], 1);
+    { label: T.poopAmtTiny,   value: '一点点' },
+    { label: T.poopAmtSmall,  value: '少' },
+    { label: T.poopAmtNormal, value: '通常' },
+    { label: T.poopAmtLarge,  value: '大' },
+  ], 2);
   body.appendChild(pickerSection(T.poopAmt, amtSeg));
 
   const consSeg = buildSegmented([
-    { label: T.poopConsSoft, value: '软' },
-    { label: T.poopConsNormal, value: '正常' },
-    { label: T.poopConsHard, value: '硬' },
-  ], 1);
+    { label: T.poopConsLoose,  value: '泻' },
+    { label: T.poopConsSoft,   value: '软' },
+    { label: T.poopConsNormal, value: '通常' },
+    { label: T.poopConsHard,   value: '硬' },
+  ], 2);
   body.appendChild(pickerSection(T.poopCons, consSeg));
 
   const colorGrid = document.createElement('div');
@@ -1880,14 +1911,23 @@ function buildEditFields(entry, body) {
         return () => ({ type: 'diaper', kind: 'wet' });
       } else {
         const amtItems = [
-          { label: T.poopAmtSmall, value: '少' }, { label: T.poopAmtNormal, value: '正常' }, { label: T.poopAmtLarge, value: '多' },
+          { label: T.poopAmtTiny,   value: '一点点' },
+          { label: T.poopAmtSmall,  value: '少' },
+          { label: T.poopAmtNormal, value: '通常' },
+          { label: T.poopAmtLarge,  value: '大' },
         ];
-        const amtSeg = buildSegmented(amtItems, Math.max(0, amtItems.findIndex(x => x.value === (entry.amount || '正常'))));
+        // 旧值兼容：'正常'→'通常'，'多'→'大'
+        const amtNorm = ({ '正常': '通常', '多': '大' })[entry.amount] || entry.amount || '通常';
+        const amtSeg = buildSegmented(amtItems, Math.max(0, amtItems.findIndex(x => x.value === amtNorm)));
         body.appendChild(pickerSection(T.poopAmt, amtSeg));
         const consItems = [
-          { label: T.poopConsSoft, value: '软' }, { label: T.poopConsNormal, value: '正常' }, { label: T.poopConsHard, value: '硬' },
+          { label: T.poopConsLoose,  value: '泻' },
+          { label: T.poopConsSoft,   value: '软' },
+          { label: T.poopConsNormal, value: '通常' },
+          { label: T.poopConsHard,   value: '硬' },
         ];
-        const consSeg = buildSegmented(consItems, Math.max(0, consItems.findIndex(x => x.value === (entry.consistency || '正常'))));
+        const consNorm = ({ '正常': '通常' })[entry.consistency] || entry.consistency || '通常';
+        const consSeg = buildSegmented(consItems, Math.max(0, consItems.findIndex(x => x.value === consNorm)));
         body.appendChild(pickerSection(T.poopCons, consSeg));
         const colorState = { value: entry.color || '黄' };
         const colorGrid = document.createElement('div'); colorGrid.className = 'color-picker';
@@ -1937,12 +1977,12 @@ function buildEditFields(entry, body) {
 // ── Edit picker (click on today-entry) ────────
 function showEditPicker(entry) {
   const [icon] = fmtEntry(entry);
-  showLogPicker(`${icon} ${entry.time || '--'} 修改`, (body, getTime) => {
+  showLogPicker(`${icon} ${entry.time || '--'} ${T.editTitle}`, (body, getTime) => {
     const getUpdates = buildEditFields(entry, body);
 
     const saveBtn = document.createElement('button');
     saveBtn.className = 'picker-confirm';
-    saveBtn.textContent = '保存修改';
+    saveBtn.textContent = T.editSave;
     saveBtn.onclick = () => {
       hideLogPicker();
       apiUpdateEntry(entry.ts, { ...getUpdates(), time: getTime() });
@@ -1951,9 +1991,9 @@ function showEditPicker(entry) {
 
     const delBtn = document.createElement('button');
     delBtn.className = 'picker-delete';
-    delBtn.textContent = '🗑️ 删除记录';
+    delBtn.textContent = T.editDelete;
     delBtn.onclick = () => {
-      if (confirm('确认删除这条记录？')) { hideLogPicker(); apiDeleteEntry(entry.ts); }
+      if (confirm(T.editConfirmDelete)) { hideLogPicker(); apiDeleteEntry(entry.ts); }
     };
     body.appendChild(delBtn);
   }, entry.time);
@@ -1976,8 +2016,6 @@ $('btn-bottle').addEventListener('click',   () => showLogPicker(T.selectBottle, 
 $('btn-sleep').addEventListener('click',    () => showLogPicker(T.btnSleep,   simpleConfirmPicker({ type: 'sleep',  action: 'start' })));
 $('btn-wake').addEventListener('click', () => {
   showLogPicker(T.btnWake, (body, getTime) => {
-    const sleepingSince = babyStats.sleeping_since; // unix ts of last sleep start
-
     // duration display
     const sec = document.createElement('div');
     sec.className = 'picker-section';
@@ -1990,14 +2028,30 @@ $('btn-wake').addEventListener('click', () => {
     body.appendChild(sec);
 
     function calcDur() {
-      if (!sleepingSince) { val.textContent = '--'; return; }
+      // wakeTs 必须按 viewingDate 构造（与 apiLog 落表日期一致），否则补录历史会算到错误日期
       const [wh, wm] = getTime().split(':').map(Number);
-      const now = new Date();
-      const wakeTs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), wh, wm).getTime() / 1000;
-      const diffS = wakeTs - sleepingSince;
+      const [vy, vmo, vd] = viewingDate.split('-').map(Number);
+      const wakeTs      = new Date(vy, vmo - 1, vd, wh, wm).getTime() / 1000;
+      const dayMidnight = new Date(vy, vmo - 1, vd).getTime() / 1000;
+      // 起睡 ts：今日视图用实时 sleeping_since；其他日期从该日条目里找未闭合的入睡
+      const startTs = (viewingDate === _sysToday)
+        ? (babyStats.sleeping_since || null)
+        : _findOpenSleepStartTs(_lastEntries, wakeTs);
+      if (!startTs) { val.textContent = '--'; return; }
+      const diffS = wakeTs - startTs;
       if (diffS <= 0) { val.textContent = '--'; return; }
-      const h = Math.floor(diffS / 3600), m = Math.floor((diffS % 3600) / 60);
-      val.textContent = h > 0 ? `${h}時間${m}分` : `${m}分`;
+      const fmtH = s => {
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+        return h > 0 ? `${h}${T.cdHour}${m}${T.cdMin}` : `${m}${T.cdMin}`;
+      };
+      // 跨日：入睡在 viewingDate 00:00 之前 → 前日/当日分别显示
+      if (startTs < dayMidnight) {
+        const yPart = dayMidnight - startTs;
+        const tPart = wakeTs      - dayMidnight;
+        val.textContent = `${fmtH(diffS)} (${T.sleepPrevDay} ${fmtH(yPart)} / ${T.sleepCurDay} ${fmtH(tPart)})`;
+      } else {
+        val.textContent = fmtH(diffS);
+      }
     }
     calcDur();
     const iv = setInterval(calcDur, 500);
@@ -2080,50 +2134,123 @@ function refreshTodayLog(scrollToTs = null) {
   }, 60);
 }
 
+// 全 list 签名 —— 内容完全相同时直接 return，连 diff 都不跑
+let _lastEntriesSig = '__init__';
+// ts → DOM node 映射，用于 DOM diff（不全清重建，避免 scrollTop 被打扰）
+let _entryNodes = new Map();
+// 当前 viewingDate 的最近一次 entries（按 ts 升序）—— 给「补录起床」modal 找本日未闭合的入睡用
+let _lastEntries = [];
+
+// 在 entries 里找最后一个未匹配 sleep-end 的 sleep-start。
+// 入睡条目带 cross_day_wake_ts 表示已被某次起床消费，跳过。
+function _findOpenSleepStartTs(entries, beforeTs) {
+  let cur = null;
+  for (const e of entries) {
+    if (e.type !== 'sleep') continue;
+    if (beforeTs != null && (e.ts || 0) >= beforeTs) continue;
+    if (e.action === 'start' && !e.cross_day_wake_ts) cur = e.ts || null;
+    else if (e.action === 'end' && cur != null) cur = null;
+  }
+  return cur;
+}
+
+function _buildEntryNode(entry) {
+  const [icon, desc] = fmtEntry(entry);
+  const div = document.createElement('div');
+  div.className = 'today-entry';
+  div.dataset.ts = String(entry.ts);
+  div.innerHTML =
+    `<div class="today-entry-time">${entry.time || '--'}</div>` +
+    `<div class="today-entry-icon">${icon}</div>` +
+    `<div class="today-entry-body">${typeof desc === 'string' ? desc.replace(/<[^>]*>/g, '') : desc}</div>`;
+  div.addEventListener('click', () => showEditPicker(entry));
+  return div;
+}
+function _entrySig(e) {
+  return `${e.type}|${e.action||''}|${e.time||''}|${e.amount_ml||''}|${e.duration_min||''}|` +
+         `${e.left_min||''}|${e.right_min||''}|${e.kind||''}|${e.amount||''}|${e.consistency||''}|` +
+         `${e.color||''}|${e.value||''}|${e.duration_str||''}|${e.text||''}`;
+}
+
 function renderTodayLog(entries, scrollToTs = null) {
   const list = $('today-log-list');
 
   renderDateStats(entries || []);
   if (!entries || !entries.length) {
-    list.innerHTML = `<div style="text-align:center;color:var(--muted);font-size:0.8rem;padding:12px">${lang === 'zh' ? '暂无记录' : '記録なし'}</div>`;
+    _lastEntries = [];
+    if (_lastEntriesSig !== '__empty__') {
+      list.innerHTML = `<div style="text-align:center;color:var(--muted);font-size:0.8rem;padding:12px">${lang === 'zh' ? '暂无记录' : '記録なし'}</div>`;
+      _entryNodes.clear();
+      _lastEntriesSig = '__empty__';
+    }
     return;
   }
 
-  // 渲染前快照滚动状态：用于重渲染后恢复，避免 baby_stats 广播打断用户阅读
-  const prevScrollTop    = list.scrollTop;
-  const prevScrollHeight = list.scrollHeight;
-  const prevClientHeight = list.clientHeight;
-  const wasAtBottom = prevScrollHeight > 0 &&
-                      (prevScrollHeight - prevScrollTop - prevClientHeight) < 30;
-
-  // 用 DocumentFragment 批量构建后一次性插入，减少重排次数
-  const frag = document.createDocumentFragment();
   const sorted = [...entries].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  _lastEntries = sorted;
+
+  // 整体签名：完全没变 + 无显式 scrollToTs → 直接 return，连 diff 都跳过
+  const fullSig = sorted.map(e => `${e.ts}|${_entrySig(e)}`).join('\n');
+  if (fullSig === _lastEntriesSig && scrollToTs == null) {
+    return;
+  }
+  _lastEntriesSig = fullSig;
+
+  // 是否贴底（用于决定有新 entry 时是否跟随到新底部）
+  const wasAtBottom =
+    list.scrollHeight > 0 &&
+    list.scrollHeight - list.scrollTop - list.clientHeight < 30;
+
+  // 首次渲染或从空状态切换：清空一次（包括"暂无记录" placeholder）
+  if (_entryNodes.size === 0) list.innerHTML = '';
+
+  // ── DOM diff ──────────────────────────────────────────────────────
+  const newTsSet = new Set(sorted.map(e => e.ts));
+
+  // 1. 删：旧节点中 ts 不在新数据里的
+  for (const [ts, node] of _entryNodes) {
+    if (!newTsSet.has(ts)) {
+      node.remove();
+      _entryNodes.delete(ts);
+    }
+  }
+
+  // 2. 增 / 改：按新顺序遍历，复用相同节点，新节点插入正确位置
   let scrollTarget = null;
-  sorted.forEach(entry => {
-    const [icon, desc] = fmtEntry(entry);
-    const div = document.createElement('div');
-    div.className = 'today-entry';
-    div.innerHTML =
-      `<div class="today-entry-time">${entry.time || '--'}</div>` +
-      `<div class="today-entry-icon">${icon}</div>` +
-      `<div class="today-entry-body">${typeof desc === 'string' ? desc.replace(/<[^>]*>/g, '') : desc}</div>`;
-    div.addEventListener('click', () => showEditPicker(entry));
-    if (scrollToTs != null && entry.ts === scrollToTs) scrollTarget = div;
-    frag.appendChild(div);
-  });
+  let prevNode = null;
+  for (const entry of sorted) {
+    const oldNode = _entryNodes.get(entry.ts);
+    const newSig  = _entrySig(entry);
 
-  list.innerHTML = '';
-  list.appendChild(frag);
+    let node;
+    if (oldNode && oldNode.dataset.sig === newSig) {
+      node = oldNode;   // 内容完全一致 → 复用，DOM 不动
+    } else {
+      node = _buildEntryNode(entry);
+      node.dataset.sig = newSig;
+      if (oldNode) {
+        oldNode.replaceWith(node);   // 同 ts 但内容变 → 原地替换
+      } else if (prevNode) {
+        prevNode.after(node);         // 在前一节点之后插入
+      } else if (list.firstChild) {
+        list.insertBefore(node, list.firstChild);
+      } else {
+        list.appendChild(node);
+      }
+      _entryNodes.set(entry.ts, node);
+    }
+    if (scrollToTs != null && entry.ts === scrollToTs) scrollTarget = node;
+    prevNode = node;
+  }
 
-  // 滚动位置恢复，优先级：① 显式 scrollToTs ② 之前在底部 ③ 保持原 scrollTop
+  // 3. 滚动策略
   if (scrollTarget) {
     scrollTarget.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   } else if (wasAtBottom) {
+    // 之前贴底 + 多了新 entry → 跟随到新底部（看到新内容）
     list.scrollTop = list.scrollHeight;
-  } else {
-    list.scrollTop = prevScrollTop;
   }
+  // 否则：scroll 状态自然保持（diff 没动现有节点的位置）
 }
 
 // ── Date nav init & midnight check ───────
@@ -2197,7 +2324,16 @@ function fmtEntry(e) {
     case 'diaper':
       if (e.kind === 'wet') return ['💧', T.entryWet];
       {
-        const d2 = [e.amount, e.consistency, e.color].filter(Boolean).join('/');
+        // 字段值是中文 enum，按当前语言翻译；旧值（'正常'/'多'）映射到新桶
+        const amtMap  = { '一点点': T.poopAmtTiny, '少': T.poopAmtSmall, '通常': T.poopAmtNormal, '大': T.poopAmtLarge,
+                          '正常': T.poopAmtNormal, '多': T.poopAmtLarge };
+        const consMap = { '泻': T.poopConsLoose, '软': T.poopConsSoft, '通常': T.poopConsNormal, '硬': T.poopConsHard,
+                          '正常': T.poopConsNormal };
+        const d2 = [
+          e.amount       ? (amtMap[e.amount]       || e.amount)       : null,
+          e.consistency  ? (consMap[e.consistency] || e.consistency)  : null,
+          e.color || null,
+        ].filter(Boolean).join('/');
         return ['💩', `${T.entryPoop}${d2 ? ` (${d2})` : ''}`];
       }
     case 'temperature': return ['🌡️', `${T.entryTemp} ${e.value}°C`];
@@ -2226,12 +2362,20 @@ setInterval(tickClock, 1000);
 applyI18n();
 els.muteBtn.title = T.muteOn;   // 初始静音状态的提示
 connectWs();
-(function() {
-  const mgr = `http://${location.hostname}:__MANAGER_PORT__`;
-  ['nav-manager','tab-manager'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.href = mgr;
-  });
+
+// ── 育儿记录滚动 anchor 兜底 ──
+// 上方统计行（喂奶/尿布/睡眠数字）位数变化会让 list 容器 clientHeight 变化几像素，
+// 用户滑到底时表现成"半条记录被推上去"。监听 list 尺寸变化，之前贴底就主动保持贴底。
+(function _logListScrollAnchor() {
+  const list = document.getElementById('today-log-list');
+  if (!list || !window.ResizeObserver) return;
+  let wasAtBottom = true;   // 初始贴底（空列表）
+  list.addEventListener('scroll', () => {
+    wasAtBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 30;
+  }, { passive: true });
+  new ResizeObserver(() => {
+    if (wasAtBottom) list.scrollTop = list.scrollHeight;
+  }).observe(list);
 })();
 </script>
 </body>

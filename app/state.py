@@ -18,6 +18,15 @@ active_ws: Set[WebSocket]                       = set()
 alert_log: list                                 = []
 rtsp_proc: Optional[asyncio.subprocess.Process] = None
 
+# BLE 失联时需要清空的字段（保留 ble_ok / cam_ok 由调用方单独管理）
+_BLE_DATA_FIELDS = ("breath_rate", "temperature", "posture", "battery", "last_update")
+
+
+def clear_ble_data() -> None:
+    """BLE 失联（心跳超时 / 找不到设备 / 连接断开）时调用，清空传感器读数避免 UI 显示过期值。"""
+    for k in _BLE_DATA_FIELDS:
+        sensor_state[k] = None
+
 # 默认 broadcast 走 WebSocket；其它进程（如 ble_service.py）可通过 set_broadcast 注入自己的实现。
 _broadcast_hook: Optional[Callable[[dict], Awaitable[None]]] = None
 
