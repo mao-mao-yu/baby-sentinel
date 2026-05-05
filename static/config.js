@@ -88,6 +88,7 @@ const LANGS = {
     mgrBtnStart: '▶ 启动', mgrBtnStop: '■ 停止', mgrBtnRestart: '↺ 重启',
     statTimes: '次', feedNone: '暂无记录', feedRecMl: '推荐', lastFeed: '上次',
     cdRemain: '还有', cdOverdue: '已超过', cdHour: '小时', cdMin: '分', cdSec: '秒',
+    nextFeedLabel: '下次喂奶',
     entryFormula: '配方奶', entryBottle: '瓶喂母乳', entryBreast: '母乳',
     entrySleep: '入睡', entryWake: '醒来',           // 与按钮文字统一
     entryWet: '尿尿', entryPoop: '便便',
@@ -147,6 +148,7 @@ const LANGS = {
     mgrBtnStart: '▶ 起動', mgrBtnStop: '■ 停止', mgrBtnRestart: '↺ 再起動',
     statTimes: '回', feedNone: '記録なし', feedRecMl: '推奨', lastFeed: '前回',
     cdRemain: 'あと', cdOverdue: '超過', cdHour: '時間', cdMin: '分', cdSec: '秒',
+    nextFeedLabel: '次の授乳',
     entryFormula: '粉ミルク', entryBottle: '母乳（哺乳瓶）', entryBreast: '母乳（直接）',
     entrySleep: '就寝', entryWake: '起床',
     entryWet: 'おしっこ', entryPoop: 'うんち',       // 便→うんち（育児アプリらしい表現）

@@ -757,7 +757,9 @@ function _updateQjButtons() {
 function onTimeUpdate() {
   if (_curIdx < 0) return;
   const seg    = _segments[_curIdx];
-  const realTs = seg.ts + Math.round(this.currentTime);
+  // 先求和再 floor：这样 seg.ts 的 sub-second 部分也参与计算，跨秒边界跟 Tapo OSD 对齐。
+  // 历史 bug：原来写 seg.ts + Math.floor(currentTime)（先 floor 再加），seg.ts 的小数被丢了。
+  const realTs = Math.floor(seg.ts + this.currentTime);
   setTimecode(realTs);
   renderSensor(nearestSensor(realTs));
   updateNowMarker();

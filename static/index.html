@@ -447,6 +447,15 @@ video {
 .feed-countdown { color: var(--green); transition: color .3s; font-size: clamp(0.85rem, 4cqi, 1.25rem); }
 .feed-countdown.warn    { color: var(--yellow); }
 .feed-countdown.overdue { color: var(--red); }
+.feed-cd-time {
+  margin-left: auto;
+  color: var(--text);
+  font-family: 'Courier New', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(0.85rem, 3.2cqi, 1.15rem);
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 .btn-row {
   display: flex;
@@ -994,6 +1003,9 @@ video {
           <div class="card-label" data-i18n="labelNextFeed">🍼 下次喂奶</div>
           <div class="card-body">
             <div class="card-value feed-countdown" id="feed-countdown">--</div>
+            <div class="feed-cd-time">
+              <span data-i18n="nextFeedLabel">下次喂奶</span>: <span id="feed-cd-time-val">--:--</span>
+            </div>
           </div>
           <div class="card-sub" id="feed-cd-sub">--</div>
         </div>
@@ -1500,8 +1512,17 @@ function renderDateStats(entries) {
 }
 
 function tickCountdown() {
-  const el = $('feed-countdown'), nft = babyStats.next_feed_ts;
-  if (!nft) { el.textContent = '--'; el.className = 'card-value feed-countdown'; return; }
+  const el = $('feed-countdown'), timeEl = $('feed-cd-time-val'), nft = babyStats.next_feed_ts;
+  if (!nft) {
+    el.textContent = '--';
+    el.className = 'card-value feed-countdown';
+    if (timeEl) timeEl.textContent = '--:--';
+    return;
+  }
+  if (timeEl) {
+    const d = new Date(nft * 1000);
+    timeEl.textContent = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }
   const totalSecs = Math.round(nft - Date.now() / 1000);
   const abs = Math.abs(totalSecs);
   const h = Math.floor(abs / 3600);

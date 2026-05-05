@@ -325,11 +325,13 @@ async def get_recording_segments(date: str):
         if not is_complete_mp4(full):
             continue
         if f in pts_map:
-            ts = int(pts_map[f])
+            # 保留浮点 sub-second 精度：ffmpeg 写的 start_pts_time 通常带几位小数，
+            # 截成 int 会让回放时间轴比 Tapo OSD 慢/快 0–999ms。
+            ts = float(pts_map[f])
         else:
             try:
                 t = _dt.strptime(f"{date} {f[:-4]}", "%Y-%m-%d %H-%M-%S")
-                ts = int(t.timestamp())
+                ts = float(t.timestamp())
             except ValueError:
                 continue
         segments.append({"file": f, "ts": ts, "url": f"/recordings/{date}/video/{f}"})
