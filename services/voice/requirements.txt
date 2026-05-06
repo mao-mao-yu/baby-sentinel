@@ -1,0 +1,21 @@
+# Voice Service — server-side dependencies
+# Install: pip install -r voice/service/requirements.txt
+# Requires CUDA-enabled PyTorch already installed for GPU Whisper inference.
+
+# Web framework (already in main requirements.txt, listed here for completeness)
+fastapi
+uvicorn[standard]
+python-multipart
+
+# STT — pick ONE depending on platform:
+faster-whisper        # Windows/Linux (CUDA or CPU)
+# mlx-whisper         # macOS Apple Silicon — uncomment and comment out faster-whisper
+
+# HTTP client
+httpx
+websockets
+
+# TTS fallback
+edge-tts
+librosa
+soundfile

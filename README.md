@@ -21,12 +21,18 @@
 ## 系统架构
 
 ```
-manager.py (9091)       ← 服务管理界面 / 子进程编排（含心跳监测、孤儿清理、自动重启）
-├── go2rtc              ← RTSP → WebRTC 流媒体转发
-├── ble_service.py (8082)
-│                       ← Sense-U 蓝牙传感器连接（独立进程，崩溃不影响主服务）
-├── server.py (8080)    ← Web UI / baby_log REST / WebSocket 广播
-└── recorder_service.py ← 连续录像（ffmpeg）+ 传感器时序存档
+manager.py (9091)            ← 服务管理界面 / 子进程编排（含心跳监测、孤儿清理、自动重启）
+├── go2rtc                   ← RTSP → WebRTC 流媒体转发
+├── ble/service.py (8082)    ← Sense-U 蓝牙传感器连接（独立进程，崩溃不影响主服务）
+├── web/server.py (8080)     ← Web UI / baby_log REST / WebSocket 广播
+└── recorder/service.py      ← 连续录像（ffmpeg）+ 传感器时序存档
+
+voice/voice_service.py (8001)           ← 语音服务（独立启动）
+│    STT: faster-whisper（CUDA）/ mlx-whisper（Apple Silicon）
+│    LLM: MiniMax（tool calling → baby_log API）
+│    TTS: MiniMax WebSocket 流式 / edge-tts 备用
+└── agent/voice_agent.py                ← 运行于 Pi / Mac with mic（独立设备）
+     唤醒词(openwakeword) → VAD录音 → POST WAV → 播放回复
 ```
 
 各服务**独立进程**，通过 HTTP 和文件互相通信。manager 维护服务生命周期：
@@ -393,11 +399,235 @@ baby-sentinel/
 │   ├── discover.py         # GATT 服务发现（调试用）
 │   ├── adv_scan.py         # BLE 广播扫描（调试用）
 │   └── import_log.py       # 第三方日志导入（如 Piyo）
+├── voice/
+│   ├── service/
+│   │   ├── voice_service.py    # 语音服务入口（FastAPI，端口 8001）
+│   │   ├── stt.py              # Whisper STT（faster-whisper / mlx-whisper）
+│   │   ├── llm_agent.py        # MiniMax LLM + tool calling + 对话历史
+│   │   ├── config.py           # 语音服务配置
+│   │   ├── requirements.txt    # 服务端依赖
+│   │   ├── tts/
+│   │   │   ├── minimax.py      # MiniMax WebSocket 流式 TTS
+│   │   │   └── edge.py         # edge-tts 备用
+│   │   └── tools/
+│   │       └── baby_records.py # LLM 工具：写/撤销育儿日志
+│   └── agent/
+│       ├── voice_agent.py      # 语音端主程序（Pi / Mac）
+│       ├── audio_capture.py    # PyAudio 麦克风录音
+│       ├── playback.py         # WAV 播放
+│       ├── generate_sounds.py  # 生成提示音 WAV
+│       ├── config.py           # 语音端配置
+│       ├── requirements.txt    # 语音端依赖
+│       └── sounds/             # 提示音文件
 ├── docs/                   # 设计文档（gitignored，新内容不自动追踪）
 ├── bin/                    # go2rtc / ffmpeg 二进制（gitignored）
 ├── logs/                   # 日志 + baby_log.db（gitignored）
 └── recordings/             # 录像（gitignored）
 ```
+
+---
+
+## 语音助手
+
+基于唤醒词 + Whisper STT + MiniMax LLM + TTS 的全双工育儿语音日记，说一句话自动写入育儿日志并语音反馈。
+
+### 架构
+
+```
+┌────────────────────────────────────────────┐
+│        语音端 (Raspberry Pi / Mac with mic)│
+├────────────────────────────────────────────┤
+│  mic -> openwakeword   唤醒词检测           │
+│          (hey_momobot.onnx)                │
+│  VAD 录音 -> 静音 2s 停止                   │
+│                                            │
+│  TTS WAV -> 交给服务端                      │
+└────────────────────┬───────────────────────┘
+                     │  WAV
+                     ▼
+┌────────────────────────────────────────────┐
+│    服务端 (MacBook Air M3 / Win CUDA)      │
+├────────────────────────────────────────────┤
+│  POST /voice/process                       │
+│  1. faster-whisper / mlx-whisper (STT)     │
+│  2. MiniMax LLM + tool calling             │
+│     └─ baby_log REST API                   │
+│  3. MiniMax / edge-tts (TTS)               │
+│                                            │
+│  GET /health                               │
+└────────────────────┬───────────────────────┘
+                     │  TTS WAV
+                     ▼
+                扬声器播放
+```
+
+流程：唤醒词触发 → 激活提示音 → 录音直到静音 2s → 发送 WAV → STT 转录 → LLM 解析意图并调用工具写日志 → TTS 合成回复 → 播放语音
+
+---
+
+### 硬件需求（语音端）
+
+- **麦克风**：ReSpeaker USB Mic Array（推荐）或任意 USB 麦克风
+- **扬声器**：USB/3.5mm 扬声器或耳机
+- **设备**：Raspberry Pi 3B+/4/Zero 2W 或 macOS
+
+---
+
+### 服务端安装
+
+#### macOS Apple Silicon（M1/M2/M3 推荐）
+
+```bash
+bash setup.sh --voice
+```
+
+脚本会自动检测 arm64 并安装 `mlx-whisper`（调用 Metal/Neural Engine，large-v3 约 1.5~2s）：
+
+```bash
+# 手动安装（可选）:
+pip install mlx-whisper
+# mlx-whisper 会在首次推理时自动从 HuggingFace 下载模型
+```
+
+#### Windows CUDA
+
+```powershell
+.\setup.ps1 -Voice
+```
+
+先安装 CUDA PyTorch（参考 [pytorch.org](https://pytorch.org/get-started/locally/)），再安装 faster-whisper：
+
+```powershell
+# CUDA PyTorch 示例（根据 CUDA 版本调整）:
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install faster-whisper
+```
+
+---
+
+### 语音端安装（Raspberry Pi / macOS）
+
+**Raspberry Pi（Linux）：**
+
+```bash
+sudo apt install portaudio19-dev python3-pyaudio
+pip install -r voice/agent/requirements.txt
+```
+
+**macOS：**
+
+```bash
+brew install portaudio
+pip install -r voice/agent/requirements.txt
+```
+
+语音端的 `config.json` 需设置服务端地址：
+
+```json
+{
+  "voice_service_url": "http://192.168.1.100:8001"
+}
+```
+
+---
+
+### 唤醒词模型
+
+默认使用自训练模型 `wakeword_training/models/hey_momobot.onnx`。如需使用 openwakeword 内置模型，修改 [voice/agent/config.py](voice/agent/config.py) 中的 `WAKE_MODEL_PATH`。
+
+首次运行会自动下载 openwakeword 基础模型：
+
+```bash
+python -c "import openwakeword; openwakeword.utils.download_models()"
+```
+
+---
+
+### 配置项（语音相关）
+
+#### 语音端
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `voice_service_url` | `http://localhost:8001` | 服务端地址（Pi 上填服务器 LAN IP） |
+| `wake_threshold` | `0.85` | 唤醒词得分阈值（提高可减少误触） |
+| `wake_confirm_frames` | `3` | 连续满足阈值的帧数才触发（每帧 80ms） |
+| `wake_peak_threshold` | `0.95` | 确认窗口内的峰值分数要求（过滤噪声脉冲） |
+| `wake_cooldown_s` | `3.0` | 两次激活间的最小冷却时间（秒） |
+| `voice_silence_rms` | `200` | VAD 静音 RMS 阈值（int16） |
+| `voice_silence_s` | `2.0` | 静音持续多少秒停止录音 |
+| `voice_max_record_s` | `15.0` | 单次录音最长时长（秒） |
+
+#### 服务端 — Whisper STT
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `whisper_model` | `large-v3` | 模型名：`tiny` / `base` / `small` / `medium` / `large-v3` |
+| `whisper_device` | `cuda` | `cuda`（GPU）或 `cpu` |
+| `whisper_compute` | `float16` | `float16`（GPU）或 `int8`（CPU 省内存） |
+| `whisper_backend` | `auto` | `auto`（macOS arm64 自动用 mlx）/ `faster-whisper` / `mlx` |
+
+#### 服务端 — LLM
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `minimax_api_key` | `""` | MiniMax API Key（必填） |
+| `minimax_base_url` | `https://api.minimaxi.com/v1` | API 端点（CN 用 `api.minimaxi.com`，国际 `api.minimax.io`） |
+| `minimax_llm_model` | `MiniMax-Text-01` | 模型名，如 `MiniMax-Text-01`、`MiniMax-M2.7` |
+
+#### 服务端 — TTS
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `tts_provider` | `minimax` | `minimax`（WebSocket 流式）或 `edge`（微软免费 TTS） |
+| `tts_model` | `speech-2.6-hd` | MiniMax TTS 模型（仅 `tts_provider=minimax` 时生效） |
+| `tts_voice_zh` | `Mandarin_Female` | 中文语音 |
+| `tts_voice_ja` | `Japanese_Female` | 日语语音 |
+
+---
+
+### 启动
+
+**服务端：**
+
+```bash
+# macOS / Linux
+./venv/bin/python voice/service/voice_service.py
+
+# Windows
+.\venv\Scripts\python.exe voice\service\voice_service.py
+```
+
+访问 `http://localhost:8001/health` 确认服务就绪（首次启动会下载/加载 Whisper 模型，约 10~30s）。
+
+**语音端（Pi / macOS with mic）：**
+
+```bash
+# 列出音频设备
+python voice/agent/voice_agent.py --list-devices
+
+# 使用默认设备（自动选 ReSpeaker）
+python voice/agent/voice_agent.py
+
+# 指定设备序号
+python voice/agent/voice_agent.py --device 2
+```
+
+---
+
+### 支持的语音指令
+
+LLM 配置了以下工具，说中文或日语均可触发：
+
+| 意图 | 示例话语 |
+|---|---|
+| 配方奶 | "刚喂了 90ml 配方奶" / "ミルクを90ml飲んだ" |
+| 母乳 | "母乳喂了左边 15 分钟" |
+| 换尿布 | "换尿布了，是湿的" |
+| 开始睡眠 | "宝宝睡着了" |
+| 结束睡眠 | "宝宝醒了" |
+| 撤销上条 | "刚才记错了，删掉" / "さっきのを削除して" |
+| 追问 | LLM 主动发起追问（如"几毫升？"），用户直接回答 |
 
 ---
 
@@ -427,17 +657,37 @@ baby-sentinel/
 **管理界面手机端 card 超出屏幕**
 - 已在新版加响应式（< 768px 单列纵滚动），刷新浏览器即可
 
+**语音服务启动后 Whisper 加载很慢**
+- 首次加载 large-v3 约 10~30s，属正常现象（模型约 3GB）
+- macOS M3 上 mlx-whisper 首次运行需从 HuggingFace 下载模型缓存，之后秒级加载
+
+**误触唤醒词频率高**
+- 提高 `wake_threshold`（默认 0.85，可调到 0.90）
+- 提高 `wake_peak_threshold`（默认 0.95，可调到 0.97~0.99）
+- 提高 `wake_confirm_frames`（默认 3，即需要 240ms 持续触发）
+
+**LLM 返回空或 503**
+- 检查 `minimax_api_key` 是否填写正确
+- 检查 `minimax_base_url`：国内用 `https://api.minimaxi.com/v1`，国际用 `https://api.minimax.io/v1`
+- MiniMax 配额耗尽时切换 TTS：`"tts_provider": "edge"`（免费，微软 Neural TTS）
+
+**Pi 连不上 voice_service**
+- 确认 `config.json` 中 `voice_service_url` 填的是服务器 LAN IP，不是 localhost
+- 服务端防火墙放开 8001 端口
+
 ---
 
 ## 路线图
 
-下一步开发计划见 [docs/voice-baby-log.md](docs/voice-baby-log.md)：
+**已完成：**
+- ✅ 语音育儿日记：唤醒词 → Whisper STT → MiniMax LLM tool calling → TTS 反馈
+- ✅ Apple Silicon 支持：mlx-whisper 后端，M3 大约 1.5~2s 完成 large-v3 推理
+- ✅ 对话历史（最近 3 轮）+ 撤销上条记录
+- ✅ 追问支持：LLM 可发起 follow-up，代理二次录音
 
-- **语音育儿日记**：树莓派 Zero 2W + ReSpeaker USB Mic Array → 唤醒词检测（openWakeWord）→ 本地 STT（faster-whisper）→ Claude API tool_use 调 baby_log API
-- **Pi 兼任 BLE 中继**：Sense-U 从 Mac mini 蓝牙总线移到 Pi，Mac 蓝牙腾出来给键鼠 / AirPods
-- **目标**：唤醒 → 说一句 → 自动写日志 → TTS 反馈，端到端延迟 < 2.5s
-
-实施分 5 个 Phase，每个 Phase 独立可验证。详见 docs。
+**待做：**
+- Pi 兼任 BLE 中继：Sense-U 从主机蓝牙移到 Pi，主机蓝牙腾出来
+- 唤醒词自定义训练文档
 
 ---
 

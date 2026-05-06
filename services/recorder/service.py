@@ -1,0 +1,259 @@
+"""BabySentinel 录像独立服务
+
+与主服务 (server.py) 完全解耦，分别启动/重启互不影响。
+
+依赖关系:
+  - 视频: ffmpeg → go2rtc RTSP (rtsp://127.0.0.1:8554/baby)
+  - 传感器: HTTP 轮询主服务 GET /api/sensor
+
+启动方式:
+  python recorder_service.py
+
+主服务重启时:
+  - 视频录制: go2rtc 随主服务重启会有短暂中断，ffmpeg 自动重连恢复
+  - 传感器记录: 轮询失败时跳过该轮，主服务恢复后自动继续
+"""
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+import asyncio
+import json
+import os
+import shutil
+import time
+import urllib.request
+from datetime import date
+
+from shared import sensors_db
+from shared.config import BASE_DIR, CFG, REC_DIR, log
+from shared.video_util import is_complete_mp4
+
+# ── 配置 ──────────────────────────────────────────────────────────────
+
+SEGMENT_S  = CFG.get("segment_s", 180)
+# 传感器写入与 BLE 轮询同频，每次成功轮询都落库
+BLE_POLL_S = CFG.get("ble_poll_interval_s", 2)
+# 残缺 mp4 清理：每 10 分钟扫一遍；mtime 早于这个阈值且无 moov 的视为崩溃残留
+CLEANUP_INTERVAL_S      = 600
+CLEANUP_AGE_THRESHOLD_S = max(SEGMENT_S * 2, 300)
+
+# ── 工具函数 ──────────────────────────────────────────────────────────
+
+def _day_dir(d: date | None = None) -> str:
+    day  = (d or date.today()).isoformat()
+    path = os.path.join(REC_DIR, day)
+    os.makedirs(os.path.join(path, "video"), exist_ok=True)
+    return path
+
+
+def _ffmpeg_bin() -> str | None:
+    p = CFG.get("ffmpeg_path", "").strip()
+    if p:
+        full = p if os.path.isabs(p) else os.path.join(BASE_DIR, p)
+        if os.path.exists(full):
+            return full
+    # auto-detect in project bin/
+    for name in ("ffmpeg.exe", "ffmpeg"):
+        candidate = os.path.join(BASE_DIR, "bin", name)
+        if os.path.exists(candidate):
+            return candidate
+    return shutil.which("ffmpeg")
+
+
+def _http_get(url: str) -> dict | None:
+    try:
+        with urllib.request.urlopen(url, timeout=3) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+def _go2rtc_ready() -> bool:
+    port = CFG.get("go2rtc_port", 1984)
+    return _http_get(f"http://127.0.0.1:{port}/api/streams") is not None
+
+
+async def _terminate_proc(proc: asyncio.subprocess.Process, name: str = "proc",
+                          term_timeout: float = 5, kill_timeout: float = 3) -> None:
+    """安全终止子进程：先 SIGTERM 等 term_timeout 秒，超时则 SIGKILL。
+    确保不会卡死调用方（如跨日切换时 ffmpeg 因 RTSP 阻塞收不到信号）。"""
+    if proc.returncode is not None:
+        return
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=term_timeout)
+        return
+    except asyncio.TimeoutError:
+        log.warning(f"[{name}] {term_timeout}s 内未退出，强制 kill")
+    proc.kill()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=kill_timeout)
+    except asyncio.TimeoutError:
+        log.warning(f"[{name}] SIGKILL 后仍未退出（已交由 OS 回收）")
+
+
+# ── 传感器记录 ────────────────────────────────────────────────────────
+
+async def sensor_record_loop() -> None:
+    port = CFG.get("web_port", 8080)
+    url  = f"http://127.0.0.1:{port}/api/sensor"
+    log.info(f"[Sensor] 传感器记录启动 (interval={BLE_POLL_S}s, db=logs/sensors.db)")
+
+    while True:
+        await asyncio.sleep(BLE_POLL_S)
+        s = _http_get(url)
+        if not s or not s.get("ble_ok"):
+            continue
+        try:
+            sensors_db.add_reading(
+                breath_rate=s.get("breath_rate"),
+                temperature=s.get("temperature"),
+                posture=s.get("posture"),
+                battery=s.get("battery"),
+            )
+        except Exception as e:
+            log.debug(f"[Sensor] 写入错误: {e}")
+
+
+# ── 残缺 mp4 清理 ─────────────────────────────────────────────────────
+
+def _cleanup_broken_mp4_once() -> int:
+    """扫描 REC_DIR 下所有 YYYY-MM-DD/video/*.mp4，删除"已老 + 缺 moov"的残段。
+    "已老" 用 mtime 判断，避开正在录制的当前段。返回删除文件数。"""
+    if not os.path.isdir(REC_DIR):
+        return 0
+    now = time.time()
+    deleted = 0
+    for d in os.listdir(REC_DIR):
+        if len(d) != 10:
+            continue
+        sub = os.path.join(REC_DIR, d, "video")
+        if not os.path.isdir(sub):
+            continue
+        for f in os.listdir(sub):
+            if not f.endswith(".mp4"):
+                continue
+            path = os.path.join(sub, f)
+            try:
+                mtime = os.path.getmtime(path)
+                if (now - mtime) < CLEANUP_AGE_THRESHOLD_S:
+                    continue   # 还很新，可能是当前正在写的段
+                if is_complete_mp4(path):
+                    continue
+                os.remove(path)
+                deleted += 1
+                log.info(f"[Cleanup] 删除残缺 mp4: {d}/{f}")
+            except OSError as e:
+                log.debug(f"[Cleanup] {d}/{f} 处理失败: {e}")
+    return deleted
+
+
+async def video_cleanup_loop() -> None:
+    log.info(f"[Cleanup] 残缺 mp4 清理循环启动 (每 {CLEANUP_INTERVAL_S}s, age>{CLEANUP_AGE_THRESHOLD_S}s)")
+    # 启动后等一小段时间再做第一次扫描，给 ffmpeg 留出从崩溃中恢复的窗口
+    await asyncio.sleep(60)
+    while True:
+        try:
+            n = _cleanup_broken_mp4_once()
+            if n:
+                log.info(f"[Cleanup] 本轮共删 {n} 个残缺片段")
+        except Exception as e:
+            log.warning(f"[Cleanup] 异常: {type(e).__name__}: {e}")
+        await asyncio.sleep(CLEANUP_INTERVAL_S)
+
+
+# ── 摄像头录像 ────────────────────────────────────────────────────────
+
+async def camera_record_loop() -> None:
+    rtsp = CFG.get("tapo_rtsp", "")
+    if "YOUR_PASSWORD" in rtsp:
+        log.warning("[Camera] tapo_rtsp 未配置，跳过录像")
+        return
+
+    ffmpeg = _ffmpeg_bin()
+    if not ffmpeg:
+        log.warning("[Camera] 未找到 ffmpeg，跳过录像")
+        return
+
+    log.info(f"[Camera] ffmpeg: {ffmpeg}")
+    src = "rtsp://127.0.0.1:8554/baby"
+
+    async def _wait_go2rtc():
+        log.info("[Camera] 等待 go2rtc 就绪...")
+        while not _go2rtc_ready():
+            await asyncio.sleep(3)
+        log.info("[Camera] go2rtc 就绪")
+
+    await _wait_go2rtc()
+
+    while True:
+        today   = date.today()
+        day_dir = _day_dir(today)
+        out_pat  = os.path.join(day_dir, "video", "%H-%M-%S.mp4")
+        idx_path = os.path.join(day_dir, "video", "index.csv")
+        log.info(f"[Camera] 连续分段录制 → {day_dir}/video/")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                ffmpeg,
+                "-loglevel", "error",
+                "-fflags", "+genpts",
+                "-rtsp_transport", "tcp",
+                "-i", src,
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "32k",
+                "-f", "segment",
+                "-segment_time", str(SEGMENT_S),
+                "-segment_format", "mp4",
+                "-segment_list", idx_path,
+                "-segment_list_type", "csv",
+                "-segment_list_flags", "+cache",
+                "-reset_timestamps", "1",   # 每段 PTS 从 0 开始，避免播放器把累积 PTS 当时长
+                "-strftime", "1",
+                out_pat,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            async def _drain():
+                async for raw in proc.stderr:
+                    txt = raw.decode(errors="replace").strip()
+                    if txt:
+                        log.warning(f"[Camera] ffmpeg: {txt}")
+
+            drain_task = asyncio.create_task(_drain())
+
+            while proc.returncode is None:
+                await asyncio.sleep(10)
+                if date.today() != today:
+                    log.info("[Camera] 日期变更，重启录像至新目录")
+                    await _terminate_proc(proc, name="Camera")
+                    break
+
+            drain_task.cancel()
+
+            if proc.returncode not in (0, None, -15):
+                log.warning(f"[Camera] ffmpeg 退出 code={proc.returncode}")
+
+        except Exception as e:
+            log.warning(f"[Camera] 异常: {type(e).__name__}: {e}")
+
+        # go2rtc 可能随主服务重启了，等它恢复
+        await _wait_go2rtc()
+        await asyncio.sleep(1)
+
+
+# ── 入口 ─────────────────────────────────────────────────────────────
+
+async def main():
+    await asyncio.gather(
+        camera_record_loop(),
+        sensor_record_loop(),
+        video_cleanup_loop(),
+    )
+
+if __name__ == "__main__":
+    log.info("BabySentinel Recorder Service 启动")
+    asyncio.run(main())

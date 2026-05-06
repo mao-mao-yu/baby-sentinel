@@ -38,3 +38,11 @@ sense-u-apk/
 *.swp
 .DS_Store
 Thumbs.db
+
+wakeword_training/
+
+# ── Voice ─────────────────────────────────────────────────────────────
+# Auto-generated beep sounds
+voice/agent/sounds/
+# Pi-side .env if any
+voice/agent/.env

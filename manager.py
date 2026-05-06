@@ -36,6 +36,14 @@ with open(CONFIG_FILE, encoding="utf-8") as _f:
 MANAGER_PORT = CFG.get("manager_port", 9091)
 _GO2RTC_EXE  = "go2rtc.exe" if sys.platform == "win32" else "go2rtc"
 
+# Pi remote agent config (optional — leave empty to skip Pi托管)
+_PI_HOST = CFG.get("pi_host", "")
+_PI_USER = CFG.get("pi_user", "pi")
+_PI_KEY  = os.path.expanduser(CFG.get("pi_ssh_key", "~/.ssh/pi_key"))
+
+import shutil as _shutil
+_SSH_BIN = _shutil.which("ssh") or "ssh"
+
 # 子进程组隔离：Unix 用 setsid（new session），Windows 用 CREATE_NEW_PROCESS_GROUP，
 # 让 _kill_tree 能干净地把整棵子进程树带走，且 manager 收到 Ctrl+C 不会直接传给子进程
 _PROC_GROUP_KW: dict = (
@@ -51,11 +59,27 @@ else:
 
 
 def _gen_go2rtc_yaml():
-    url  = CFG.get("tapo_rtsp", "")
-    port = CFG.get("go2rtc_port", 1984)
-    path = os.path.join(BASE_DIR, "go2rtc.yaml")
+    tapo_url  = CFG.get("tapo_rtsp", "")
+    audio_url = CFG.get("pi_audio_rtsp", "").strip()  # rtsp://pi_ip:8554/respeaker
+    port      = CFG.get("go2rtc_port", 1984)
+    path      = os.path.join(BASE_DIR, "go2rtc.yaml")
+
+    if audio_url:
+        # ReSpeaker available: merge TAPO video + Pi audio (video path unchanged, no latency hit)
+        stream_entry = (
+            f"ffmpeg:-rtsp_transport tcp -i {tapo_url} "
+            f"-rtsp_transport tcp -i {audio_url} "
+            f"-map 0:v:0 -map 1:a:0 -c:v copy -c:a copy -f rtsp pipe:1"
+        )
+    else:
+        # No Pi audio configured: use TAPO stream as-is (video + TAPO built-in audio)
+        stream_entry = tapo_url
+
     with open(path, "w", encoding="utf-8") as f:
-        f.write(f"streams:\n  baby: {url}\n\napi:\n  listen: :{port}\n  origin: '*'\n")
+        f.write(
+            f"streams:\n  baby: {stream_entry}\n\n"
+            f"api:\n  listen: :{port}\n  origin: '*'\n"
+        )
 
 
 # ── 服务定义 ──────────────────────────────────────────────────────────
@@ -76,25 +100,48 @@ SERVICES: dict[str, dict] = {
         "name":       "BLE Sensor",
         "icon":       "📡",
         "desc":       f"Sense-U 蓝牙传感器   :{CFG.get('ble_port', 8082)}",
-        "cmd":        [sys.executable, "-u", "ble_service.py"],
+        "cmd":        [sys.executable, "-u", "services/ble/service.py"],
         "port":       CFG.get("ble_port", 8082),
     },
     "server": {
         "name":       "BabySentinel Server",
         "icon":       "🍼",
         "desc":       f"Web · 摄像头 · 提醒 · Discord   :{CFG.get('web_port', 8080)}",
-        "cmd":        [sys.executable, "-u", "server.py"],
+        "cmd":        [sys.executable, "-u", "services/web/server.py"],
         "port":       CFG.get("web_port", 8080),
     },
     "recorder": {
         "name":       "Recorder",
         "icon":       "⏺",
         "desc":       "视频录制 · 传感器时序存档",
-        "cmd":        [sys.executable, "-u", "recorder_service.py"],
+        "cmd":        [sys.executable, "-u", "services/recorder/service.py"],
         "port":       None,
         # adoptable: manager 启动时若已有同名进程在跑就直接接管而不杀，避免录像中断
         "adoptable":  True,
-        "script":     "recorder_service.py",
+        "script":     "services/recorder/service.py",
+    },
+    "voice": {
+        "name":       "Voice Service",
+        "icon":       "🎙",
+        "desc":       f"Whisper STT · MiniMax LLM · TTS   :{CFG.get('voice_service_port', 8001)}",
+        "cmd":        [sys.executable, "-u", "services/voice/voice_service.py"],
+        "port":       CFG.get("voice_service_port", 8001),
+    },
+    "voice_agent": {
+        "name":       "Voice Agent (Pi)",
+        "icon":       "🎤",
+        "desc":       f"唤醒词 · 录音 · TTS播放   Pi: {_PI_HOST or '(未配置 pi_host)'}",
+        # SSH into Pi if pi_host is set; otherwise fall back to local run
+        "cmd":        (
+            [_SSH_BIN, "-t", "-i", _PI_KEY,
+             "-o", "StrictHostKeyChecking=no",
+             "-o", "BatchMode=yes",
+             f"{_PI_USER}@{_PI_HOST}",
+             "cd ~/BabySentinel && ./venv/bin/python -u agent/voice_agent.py"]
+            if _PI_HOST else
+            [sys.executable, "-u", "agent/voice_agent.py"]
+        ),
+        "port":       None,
     },
 }
 
@@ -378,7 +425,7 @@ async def _do_stop(svc: str):
 
 def _scan_and_kill_orphans() -> None:
     """启动前扫描同项目残留的孤儿子进程并整组干掉（PPID=1, cwd 在项目目录下）。
-    adoptable 的服务（如 recorder_service.py）跳过——它们的孤儿留给 _do_start 接管，
+    adoptable 的服务（如 recorder/service.py）跳过——它们的孤儿留给 _do_start 接管，
     避免杀掉正在录像的进程导致 mp4 文件损坏。"""
     if sys.platform == "win32":
         return
@@ -391,7 +438,7 @@ def _scan_and_kill_orphans() -> None:
 
     try:
         out = subprocess.check_output(
-            ["pgrep", "-f", "ble_service.py|recorder_service.py|server.py"],
+            ["pgrep", "-f", "services/ble/service.py|services/recorder/service.py|services/web/server.py"],
             text=True, stderr=subprocess.DEVNULL, timeout=5,
         )
     except Exception:
@@ -467,7 +514,7 @@ atexit.register(_cleanup_at_exit)
 
 
 app = FastAPI(title="BabySentinel Manager", lifespan=_lifespan)
-app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "services", "web", "static")), name="static")
 
 # 静态资源版本号——manager 启动时一次确定，强制浏览器跳过旧 cache
 _CFG_VER = str(int(time.time()))
@@ -475,7 +522,7 @@ _CFG_VER = str(int(time.time()))
 
 @app.get("/")
 async def index():
-    with open(os.path.join(BASE_DIR, "static", "manager.html"), encoding="utf-8") as f:
+    with open(os.path.join(BASE_DIR, "services", "web", "static", "manager.html"), encoding="utf-8") as f:
         html = (f.read()
                 .replace("__WEB_PORT__", str(CFG.get("web_port", 8080)))
                 .replace("__CFG_VER__", _CFG_VER))

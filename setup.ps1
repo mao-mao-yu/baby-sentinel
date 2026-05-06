@@ -1,7 +1,9 @@
 # BabySentinel setup script (Windows PowerShell)
 # Usage: .\setup.ps1
 
-param()
+param(
+    [switch]$Voice   # also install voice/service deps (Whisper + TTS)
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -144,7 +146,29 @@ Write-Step "Creating runtime directories"
 }
 Write-Ok "logs/  recordings/  bin/"
 
-# ── 8. Pairing reminder ───────────────────────────────────────────────
+# ── 8. Voice Service deps (optional, pass -Voice flag) ───────────────
+Write-Step "Voice Service dependencies"
+if ($Voice) {
+    Write-Ok "-Voice flag detected, installing voice/service deps …"
+    & $PIP install -r voice\requirements.txt
+    Write-Ok "Voice service deps installed"
+    Write-Warn "For GPU (CUDA) Whisper inference, install CUDA-enabled PyTorch first:"
+    Write-Warn "  https://pytorch.org/get-started/locally/"
+    Write-Warn "Then re-run: pip install faster-whisper"
+    # Generate beep sounds if not present
+    $beepFile = "agent\sounds\beep_activate.wav"
+    if (-not (Test-Path $beepFile)) {
+        Write-Warn "Generating beep sounds …"
+        & ".\venv\Scripts\python.exe" agent\generate_sounds.py
+        Write-Ok "Beep sounds generated"
+    } else {
+        Write-Ok "Beep sounds already exist"
+    }
+} else {
+    Write-Ok "Skipped (run with -Voice to install: .\setup.ps1 -Voice)"
+}
+
+# ── 9. Pairing reminder ───────────────────────────────────────────────
 Write-Step "Sense-U pairing"
 if (Test-Path "baby_code.json") {
     Write-Ok "baby_code.json exists, no re-pairing needed"
@@ -158,6 +182,13 @@ Write-Host ""
 Write-Host "  Setup complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Start with:" -ForegroundColor White
-Write-Host "    .\venv\Scripts\python.exe manager.py   # Manager UI  http://localhost:9091" -ForegroundColor DarkGray
-Write-Host "    .\venv\Scripts\python.exe server.py    # Main server http://localhost:8080" -ForegroundColor DarkGray
+Write-Host "    .\venv\Scripts\python.exe manager.py                  # Manager UI  http://localhost:9091" -ForegroundColor DarkGray
+Write-Host "    .\venv\Scripts\python.exe services\web\server.py                # Main server http://localhost:8080" -ForegroundColor DarkGray
+Write-Host "    .\venv\Scripts\python.exe voice\voice_service.py          # Voice Service http://localhost:8001  (if -Voice was used)" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  Voice assistant (after setting up voice deps):" -ForegroundColor White
+Write-Host "    1. Run .\setup.ps1 -Voice    to install Whisper/TTS deps" -ForegroundColor DarkGray
+Write-Host "    2. Edit config.json          set minimax_api_key, whisper_device, etc." -ForegroundColor DarkGray
+Write-Host "    3. Start voice_service.py    server side (this machine)" -ForegroundColor DarkGray
+Write-Host "    4. Start voice_agent.py      on Raspberry Pi / macOS with mic" -ForegroundColor DarkGray
 Write-Host ""

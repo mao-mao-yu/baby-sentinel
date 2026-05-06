@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # BabySentinel setup script (macOS / Linux)
-# Usage: bash setup.sh
+# Usage: bash setup.sh          # core setup only
+#        bash setup.sh --voice  # also install Voice Service deps (Whisper + TTS)
 
 set -e
+
+VOICE=0
+for arg in "$@"; do
+  [[ "$arg" == "--voice" ]] && VOICE=1
+done
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
@@ -137,7 +143,49 @@ step "创建运行时目录"
 mkdir -p logs recordings
 green "logs/  recordings/"
 
-# ── 8. 配对提示 ───────────────────────────────────────────────────────
+# ── 8. Voice Service deps (optional, pass --voice) ───────────────────
+step "语音助手依赖 (Voice Service)"
+if [[ "$VOICE" -eq 1 ]]; then
+    ARCH=$(uname -m)
+    if [[ "$(uname)" == "Darwin" && "$ARCH" == "arm64" ]]; then
+        yellow "检测到 Apple Silicon，安装 mlx-whisper 替代 faster-whisper …"
+        # Install everything except faster-whisper; add mlx-whisper
+        $PIP install fastapi "uvicorn[standard]" python-multipart httpx websockets edge-tts librosa soundfile
+        $PIP install mlx-whisper
+        green "mlx-whisper 及 TTS 依赖安装完成 (Apple Silicon)"
+    else
+        $PIP install -r services/voice/requirements.txt
+        green "Voice Service 依赖安装完成"
+        yellow "如需 GPU (CUDA) 推理，请先安装 CUDA PyTorch:"
+        yellow "  https://pytorch.org/get-started/locally/"
+    fi
+    # PortAudio for voice agent (mic capture on macOS)
+    if [[ "$(uname)" == "Darwin" ]]; then
+        if command -v brew &>/dev/null; then
+            if ! brew list portaudio &>/dev/null 2>&1; then
+                yellow "安装 PortAudio（PyAudio 依赖）…"
+                brew install portaudio
+                green "PortAudio 已安装"
+            else
+                green "PortAudio 已存在"
+            fi
+        else
+            yellow "未找到 Homebrew，如需在本机运行 voice_agent，请手动: brew install portaudio"
+        fi
+    fi
+    # Generate beep sounds if not present
+    if [[ ! -f "agent/sounds/beep_activate.wav" ]]; then
+        yellow "生成提示音 …"
+        $PY agent/generate_sounds.py
+        green "提示音已生成"
+    else
+        green "提示音已存在"
+    fi
+else
+    green "跳过（如需安装，重新运行: bash setup.sh --voice）"
+fi
+
+# ── 9. 配对提示 ───────────────────────────────────────────────────────
 step "Sense-U 配对"
 if [[ -f "baby_code.json" ]]; then
     green "baby_code.json 已存在，无需重新配对"
@@ -151,6 +199,13 @@ echo ""
 echo -e "\033[32m  安装完成！\033[0m"
 echo ""
 echo "  启动方式:"
-echo "    ./venv/bin/python manager.py   # 管理界面 http://localhost:9091"
-echo "    ./venv/bin/python server.py    # 仅主服务 http://localhost:8080"
+echo "    ./venv/bin/python manager.py                       # 管理界面 http://localhost:9091"
+echo "    ./venv/bin/python services/web/server.py                    # 仅主服务 http://localhost:8080"
+echo "    ./venv/bin/python services/voice/voice_service.py  # 语音服务 http://localhost:8001  (需 --voice)"
+echo ""
+echo "  语音助手设置:"
+echo "    1. 运行 bash setup.sh --voice         安装 Whisper/TTS 依赖"
+echo "    2. 编辑 config.json                   填写 minimax_api_key、whisper_device 等"
+echo "    3. 启动 services/voice/voice_service.py（本机，服务端）"
+echo "    4. 在 Pi 上安装 agent/requirements.txt 并运行 voice_agent.py"
 echo ""
