@@ -27,24 +27,29 @@ set -euo pipefail
 ALSA_DEVICE="${1:-default}"     # PipeWire/PulseAudio default, or plughw:1,0 etc.
 MEDIAMTX_URL="rtsp://localhost:8554/respeaker"
 SAMPLE_RATE=48000               # Opus 内部强制 48 kHz；这里也用 48k 省一次重采样
-CHANNELS=1                      # mono — 婴儿监控不需要立体声
+BITRATE="${BITRATE:-64k}"       # Opus 码率，可通过环境变量覆盖：BITRATE=96k bash agent/pi_streamer.sh
 
-echo "[pi_streamer] Input:  ALSA device='$ALSA_DEVICE' ${SAMPLE_RATE}Hz mono"
-echo "[pi_streamer] Codec:  libopus 32k lowdelay frame=20ms"
+echo "[pi_streamer] Input:  ALSA device='$ALSA_DEVICE' ${SAMPLE_RATE}Hz stereo→mono(c0)"
+echo "[pi_streamer] Codec:  libopus ${BITRATE} VBR lowdelay frame=20ms"
 echo "[pi_streamer] Output: $MEDIAMTX_URL  (UDP)"
 echo "[pi_streamer] Press Ctrl+C to stop."
 echo ""
 
 # Loop: auto-restart on ffmpeg crash
 while true; do
+    # ALSA 拿原始 stereo（ReSpeaker UAC1.0 firmware 是 2ch 输出）→ pan filter
+    # 显式取 channel 0，避免 ffmpeg 自动 L+R 平均把另一道的噪声也带进来。
+    # VBR (constrained) + 64k 是 voice/婴儿监控的甜点：嘶嘶底噪几乎消失，
+    # 仍远低于 AAC 128k stereo 的码率。
     ffmpeg \
         -loglevel warning \
-        -f alsa -ac "$CHANNELS" -ar "$SAMPLE_RATE" -i "$ALSA_DEVICE" \
+        -f alsa -ac 2 -ar "$SAMPLE_RATE" -i "$ALSA_DEVICE" \
+        -af "pan=mono|c0=c0" \
         -c:a libopus \
-        -b:a 32k \
+        -b:a "$BITRATE" \
+        -vbr constrained \
         -application lowdelay \
         -frame_duration 20 \
-        -vbr off \
         -compression_level 5 \
         -f rtsp -rtsp_transport udp \
         "$MEDIAMTX_URL" \
