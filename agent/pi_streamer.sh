@@ -37,14 +37,20 @@ echo ""
 
 # Loop: auto-restart on ffmpeg crash
 while true; do
-    # ALSA 拿原始 stereo（ReSpeaker UAC1.0 firmware 是 2ch 输出）→ pan filter
-    # 显式取 channel 0，避免 ffmpeg 自动 L+R 平均把另一道的噪声也带进来。
-    # VBR (constrained) + 64k 是 voice/婴儿监控的甜点：嘶嘶底噪几乎消失，
-    # 仍远低于 AAC 128k stereo 的码率。
+    # ALSA 拿原始 stereo（ReSpeaker UAC1.0 firmware 是 2ch 输出，c1 通常是 AEC
+    # 参考通道几乎静音，所以必须显式取 c0）→ 频段限制 + afftdn 频谱降噪
+    # → libopus 64k VBR lowdelay。
+    #
+    # filter 链解析：
+    #   pan=mono|c0=c0       取 c0 单声道（c1 是空的）
+    #   highpass=f=80        砍 80Hz 以下 USB 嗡声 / 工频
+    #   lowpass=f=8000       砍 8kHz 以上语音外频段（hiss 主要在这里）
+    #   afftdn=nr=12:nt=w    FFT 噪声谱估计 + 减除，nr 越大越激进，
+    #                        12 dB 是 voice-friendly 甜点；nt=w 自动学噪声谱
     ffmpeg \
         -loglevel warning \
         -f alsa -ac 2 -ar "$SAMPLE_RATE" -i "$ALSA_DEVICE" \
-        -af "pan=mono|c0=c0" \
+        -af "pan=mono|c0=c0,highpass=f=80,lowpass=f=8000,afftdn=nr=12:nt=w" \
         -c:a libopus \
         -b:a "$BITRATE" \
         -vbr constrained \
