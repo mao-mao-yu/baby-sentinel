@@ -369,6 +369,12 @@ Discord Bot 提供两个 Slash command：
 
 ## Pi 麦克风音频接入（替代 Tapo 内置麦）
 
+> ⚠️ **实测告警（2026-05）**：用 **ReSpeaker 4-Mic Array (UAC1.0)** + Pi 4 实测，静室里硬件底噪明显（c0 通道 RMS -42 dB，是 firmware AGC 在静音时拉满放大模拟前端噪声所致）。换 USB 线、换 Pi 端口、`afftdn` 频谱降噪（产生 musical noise）、`agate` noise gate 等组合都未能得到自然听感。Tapo 内置麦虽是 8kHz pcm_alaw 音质有限，但 baseline 干净不烦人。
+> 
+> **结论**：当前不推荐 ReSpeaker UAC1.0 走这条链路。如果你想再试，建议换 **带 XMOS VocalFusion DSP 固件的 ReSpeaker（如 USB Mic Array v2.0）**——它的 firmware 会做 NS/AGC 处理，c0 输出已经是降噪后的语音通道。或换其它带本地 DSP 的 USB mic。
+> 
+> 下面整套部署方案保留为**有效参考**，代码（`agent/pi_streamer.sh` + `manager._gen_go2rtc_yaml` 多源逻辑）也都还在；只要 `pi_audio_rtsp` 不为空就会走多源，留空就 fallback 到 Tapo 单源。
+
 如果你在 Pi 上接了 ReSpeaker 等 USB 麦克风（音质比 Tapo 内置麦好得多），可以让监控页同时显示 Tapo 视频 + Pi 麦音频，端到端延迟在 100~200ms。
 
 ### 工作原理
@@ -415,26 +421,59 @@ ReSpeaker → Pi ALSA → ffmpeg(libopus 32k) → mediamtx RTSP → 服务端 go
    bash agent/pi_streamer.sh plughw:1,0
    ```
 
-   或者 systemd 化（强烈推荐 24/7 跑）：
-
-   ```ini
-   # /etc/systemd/system/pi-streamer.service
-   [Unit]
-   Description=BabySentinel Pi audio streamer
-   After=network.target sound.target
-
-   [Service]
-   ExecStart=/bin/bash /home/pi/baby-sentinel/agent/pi_streamer.sh plughw:1,0
-   Restart=always
-   RestartSec=3
-   User=pi
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
+   或者用 **systemd user 服务**（实测推荐，**无需 sudo**）：
 
    ```bash
-   sudo systemctl enable --now pi-streamer mediamtx
+   mkdir -p ~/.config/systemd/user
+
+   cat > ~/.config/systemd/user/mediamtx.service <<'UNIT'
+   [Unit]
+   Description=mediamtx RTSP server (BabySentinel)
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   Type=simple
+   ExecStart=%h/mediamtx/mediamtx %h/mediamtx/mediamtx.yml
+   Restart=always
+   RestartSec=3
+
+   [Install]
+   WantedBy=default.target
+   UNIT
+
+   cat > ~/.config/systemd/user/pi-streamer.service <<'UNIT'
+   [Unit]
+   Description=BabySentinel Pi audio streamer (ReSpeaker → mediamtx)
+   After=mediamtx.service sound.target network-online.target
+   Requires=mediamtx.service
+
+   [Service]
+   Type=simple
+   ExecStartPre=/bin/sleep 4
+   ExecStart=/bin/bash %h/BabySentinel/agent/pi_streamer.sh plughw:1,0
+   Restart=always
+   RestartSec=3
+
+   [Install]
+   WantedBy=default.target
+   UNIT
+
+   systemctl --user daemon-reload
+   systemctl --user enable --now mediamtx pi-streamer
+
+   # 关键一步：让服务在重启后自动起（无需 SSH 登录）
+   loginctl enable-linger $USER
+   ```
+
+   `loginctl enable-linger` 在多数发行版可由用户自助 polkit 通过，不需要 sudo。
+
+   日常运维：
+
+   ```bash
+   systemctl --user status pi-streamer        # 看状态
+   systemctl --user restart pi-streamer       # 改 streamer.sh 后生效
+   journalctl --user -u pi-streamer -f        # 看日志
    ```
 
 ### 服务端配置
