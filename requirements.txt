@@ -11,6 +11,7 @@ faster-whisper
 # macOS Apple Silicon — uncomment and comment out faster-whisper above:
 # mlx-whisper
 httpx
+openai
 edge-tts
 librosa
 soundfile

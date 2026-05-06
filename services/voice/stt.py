@@ -120,15 +120,16 @@ class STT:
 
     def _transcribe_mlx(self, wav_bytes: bytes, force_lang: str | None = None) -> tuple[str, str]:
         import mlx_whisper
-        from services.voice.config import WHISPER_MODEL, WHISPER_BEAM_SIZE, WHISPER_INITIAL_PROMPT
+        from services.voice.config import WHISPER_MODEL, WHISPER_INITIAL_PROMPT
         repo  = _MLX_REPOS.get(WHISPER_MODEL, f"mlx-community/whisper-{WHISPER_MODEL}-mlx")
         audio = _wav_to_float32(wav_bytes)
+        # mlx-whisper 只实现了 greedy decoder（beam search 未实现），所以不能传 beam_size。
+        # 短句场景 greedy 已够用；要更高精度建议切 faster-whisper 后端。
         result = mlx_whisper.transcribe(
             audio,
             path_or_hf_repo=repo,
             language=force_lang,
             initial_prompt=WHISPER_INITIAL_PROMPT,
-            beam_size=WHISPER_BEAM_SIZE,
             temperature=0.0,
             condition_on_previous_text=False,
             verbose=False,

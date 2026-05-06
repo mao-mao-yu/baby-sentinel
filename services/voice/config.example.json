@@ -1,0 +1,21 @@
+{
+  "internal_api_key": "",
+  "llm_provider": "minimax",
+  "minimax_api_key": "",
+  "minimax_base_url": "https://api.minimaxi.com/v1",
+  "minimax_llm_model": "MiniMax-Text-01",
+  "deepseek_api_key": "",
+  "deepseek_base_url": "https://api.deepseek.com",
+  "deepseek_model": "deepseek-v4-flash",
+  "deepseek_reasoning_effort": "high",
+  "deepseek_thinking_enabled": true,
+  "tts_provider": "minimax",
+  "tts_model": "speech-2.6-hd",
+  "tts_voice_zh": "Mandarin_Female",
+  "tts_voice_ja": "Japanese_Female",
+  "tts_voice_en": "English_Female",
+  "whisper_model": "large-v3",
+  "whisper_device": "cuda",
+  "whisper_compute": "float16",
+  "whisper_backend": "auto"
+}

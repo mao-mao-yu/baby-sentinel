@@ -13,10 +13,9 @@ import json
 import logging
 import re
 from collections import deque
+from datetime import datetime
 
-import httpx
-
-from services.voice import config as cfg
+from services.voice.llm.base import LLMProvider
 from services.voice.tools.baby_records import TOOL_DEFINITIONS, execute_tool
 
 log = logging.getLogger("VoiceService.LLM")
@@ -33,6 +32,24 @@ _SYSTEM_PROMPT = """你是育儿助手，通过语音帮父母记录宝宝日常
 · 未说体温数值     → "多少度？"               /「何度ですか？」
 
 【工具选择由 tool description 决定，意图不明时礼貌说没听清，不要乱猜】
+
+【尿布消歧规则 / おむつ記録の解釈】
+amount 和 consistency 的 enum 都含『通常』，遇到日语『普通』『ふつう』时按以下规则消歧：
+1. 若用户**同时**说了性状词（『下痢』『軟便』『ゆるい』『硬い』『水様』）和『普通』
+   → 性状词填 consistency，『普通』必须填 amount=通常
+   例：「うんち、普通、下痢、黄色」→ amount=通常, consistency=泻, color=黄色
+2. 若用户**单独**说『普通』『ふつう』『普通くらい』而无其他性状/量描述
+   → 默认填 amount=通常（量比硬度更常见地用『普通』表达）
+3. 若用户明确说『硬さは普通』『普通便』『いつも通りの便』
+   → 填 consistency=通常
+
+【时间处理 / 時刻処理】
+- 用户明确说出时间（"3 点喝的"、"11 時 30 分にミルク"）或相对时间（"一小时前换的尿布"、"30 分前にうんち"）时，
+  把发生时间换算为 24 小时制 HH:MM 填到 tool 的 time 参数（基于下方"当前时间"做基准）。
+  · "下午 3 点" / 当前 14:00 → time="15:00"
+  · "1 小时前" / 当前 14:30 → time="13:30"
+  · "晚上 11 点" / 当前 01:00 次日 → time="23:00"（系统会自动当作昨天）
+- 用户没说时间 → 不要传 time 参数（默认用当前时间记录）。
 
 【语言规则】
 - 只输出纯文字，禁止 emoji，句尾必须有标点。
@@ -52,7 +69,10 @@ def _strip_think(text: str) -> str:
 
 
 class LLMAgent:
-    def __init__(self) -> None:
+    def __init__(self, provider: LLMProvider) -> None:
+        # provider 决定了 chat/completions 走哪家（MiniMax / DeepSeek / …）。
+        # LLMAgent 自身只负责工具编排、history、time-injection 这层业务逻辑。
+        self._provider = provider
         # Each element is a list of messages representing one complete turn:
         # [user_msg, assistant_msg(±tool_calls), *tool_results, assistant_final_msg]
         self._history: deque[list[dict]] = deque(maxlen=_HISTORY_TURNS)
@@ -74,8 +94,16 @@ class LLMAgent:
 
         tool_calls = msg.get("tool_calls") or []
         if not tool_calls:
-            reply = _strip_think(msg.get("content", "没有听清楚，请再说一次。"))
+            raw_content = msg.get("content") or ""
+            reply = _strip_think(raw_content)
             needs_followup = reply.rstrip().endswith(("？", "?"))
+            if not reply:
+                # 诊断：finish_reason、原始 content 长度、是否全在 <think> 里
+                fr = response["choices"][0].get("finish_reason")
+                has_think = "<think>" in raw_content
+                log.warning(f"[LLM] empty reply diagnosis:  finish_reason={fr}  "
+                            f"raw_content_len={len(raw_content)}  has_think_tag={has_think}  "
+                            f"raw_content={raw_content!r}")
             log.info(f"[LLM] no tool_calls — reply={reply!r}  needs_followup={needs_followup}")
             self._history.append([current_user, {"role": "assistant", "content": reply}])
             return reply, needs_followup
@@ -105,10 +133,17 @@ class LLMAgent:
             })
 
         # Round 2: LLM generates confirmation with tool results
+        # DeepSeek thinking 模式要求 reasoning_content 必须随 round-1 的 assistant 消息一并回传，
+        # 否则 round 2 会 400。MiniMax 把 think 内嵌在 content 里没有此字段，conditional add
+        # 让两家都能跑。
+        r1_assistant: dict = {"role": "assistant", "content": None, "tool_calls": tool_calls}
+        if msg.get("reasoning_content"):
+            r1_assistant["reasoning_content"] = msg["reasoning_content"]
+
         r2_messages = (
             history_msgs
             + [current_user]
-            + [{"role": "assistant", "content": None, "tool_calls": tool_calls}]
+            + [r1_assistant]
             + tool_results
         )
         response2 = await self._chat(r2_messages)
@@ -117,40 +152,19 @@ class LLMAgent:
 
         self._history.append([
             current_user,
-            {"role": "assistant", "content": None, "tool_calls": tool_calls},
+            r1_assistant,
             *tool_results,
             {"role": "assistant", "content": reply},
         ])
         return reply, False
 
     async def _chat(self, messages: list) -> dict:
-        base = cfg.MINIMAX_BASE_URL.rstrip("/")
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(
-                f"{base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {cfg.MINIMAX_API_KEY}",
-                    "Content-Type":  "application/json",
-                },
-                json={
-                    "model":       cfg.MINIMAX_LLM_MODEL,
-                    "messages":    [{"role": "system", "content": _SYSTEM_PROMPT}] + messages,
-                    "tools":       TOOL_DEFINITIONS,
-                    "tool_choice": "auto",
-                    "max_tokens":  256,
-                },
-            )
-        if r.status_code >= 400:
-            log.error(f"[LLM] HTTP {r.status_code}: {r.text[:600]}")
-        r.raise_for_status()
-        data = r.json()
-        base_resp = data.get("base_resp", {})
-        if base_resp.get("status_code", 0) != 0:
-            raise RuntimeError(
-                f"MiniMax error {base_resp.get('status_code')}: "
-                f"{base_resp.get('status_msg', '')} | body: {data}"
-            )
-        if not data.get("choices"):
-            log.error(f"[LLM] Unexpected response (no choices): {data}")
-            raise RuntimeError(f"MiniMax returned no choices: {data}")
-        return data
+        # 把"当前时间"注入到 system prompt，让 LLM 能把"3点"/"一小时前"换算成绝对 HH:MM
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M %A")
+        system_content = f"{_SYSTEM_PROMPT}\n\n【当前时间 / 現在時刻】{now_str}"
+        return await self._provider.chat(
+            messages=[{"role": "system", "content": system_content}] + messages,
+            tools=TOOL_DEFINITIONS,
+            tool_choice="auto",
+            max_tokens=2048,
+        )

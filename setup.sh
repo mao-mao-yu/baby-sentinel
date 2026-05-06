@@ -133,7 +133,7 @@ else
     cp config.example.json config.json
     green "已从 config.example.json 复制 → config.json"
     yellow "请编辑 config.json 填写以下必填项:"
-    yellow "  ble_address         Sense-U 蓝牙地址 (工具: python tools/scan_ble.py)"
+    yellow "  ble_address         Sense-U 蓝牙地址 (工具: python tools/scan.py)"
     yellow "  tapo_rtsp           摄像头 RTSP 地址"
     yellow "  baby.birth_date     宝宝生日 (YYYYMMDD)"
 fi

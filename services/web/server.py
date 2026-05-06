@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from shared.config import BASE_DIR, CFG, REC_DIR, log
+from shared.config import BASE_DIR, REC_DIR, log
 from shared.state import active_ws, sensor_state
 import shared.state as state
 import shared.camera as camera
@@ -24,6 +24,11 @@ from shared.video_util import is_complete_mp4
 from shared.alerts import trigger_alert
 from shared.i18n import t
 from shared.notify.discord_bot import GatewayClient
+from services.web.config import (
+    WEB_HOST, WEB_PORT, BLE_PORT, MANAGER_PORT,
+    FEED_REPEAT_S, BLE_HEALTH_TIMEOUT_S, BLE_POLL_INTERVAL_S,
+    SEGMENT_S, BABY, DISCORD_TOKEN,
+)
 
 # BLE 字段由 ble_service.py 进程管理，通过 /api/internal/sensor 推送过来
 _BLE_FIELDS = frozenset((
@@ -31,8 +36,8 @@ _BLE_FIELDS = frozenset((
     "battery", "ble_ok", "last_update",
 ))
 
-_FEED_REPEAT        = CFG.get("feed_repeat_s", 1800)
-_BLE_HEALTH_TIMEOUT = CFG.get("ble_health_timeout_s", 10)  # 超过 N 秒没收到 BLE 推送就标未连接
+_FEED_REPEAT        = FEED_REPEAT_S
+_BLE_HEALTH_TIMEOUT = BLE_HEALTH_TIMEOUT_S
 
 _reminder_feed_ts:   float = 0   # 正在追踪的那次喂奶的 ts
 _last_reminder_time: float = 0   # 上次发出提醒的时刻
@@ -58,7 +63,7 @@ async def _feed_reminder_loop():
     while True:
         await asyncio.sleep(60)
         try:
-            interval_min   = int(CFG.get("baby", {}).get("feed_interval_min", 150))
+            interval_min   = int(BABY.get("feed_interval_min", 150))
             feed_threshold = interval_min * 60
 
             entries  = baby_log.get_today()
@@ -93,7 +98,7 @@ async def _feed_reminder_loop():
             h = int(elapsed_s // 3600)
             m = int((elapsed_s % 3600) // 60)
             duration = t("duration_h_m", h=h, m=m) if h else t("duration_m", m=m)
-            name     = CFG.get("baby", {}).get("name", "")
+            name     = BABY.get("name", "")
             msg      = t("alert_feed", duration=duration, name=name)
 
             await trigger_alert(msg, "warning")
@@ -110,9 +115,13 @@ async def _lifespan(_: FastAPI):
     asyncio.create_task(_ble_health_loop())
     # 录像由独立进程 recorder_service.py 负责，此处不再启动
 
-    token = CFG.get("discord_token", "")
+    token = DISCORD_TOKEN
     if token:
-        gw = GatewayClient(token, lambda: sensor_state)
+        gw = GatewayClient(
+            token,
+            lambda: sensor_state,
+            lambda: (baby_log.get_today(), baby_log.get_stats()),
+        )
         asyncio.create_task(gw.run())
 
     yield
@@ -144,7 +153,7 @@ async def ws_handler(websocket: WebSocket):
             "type":        "state",
             "sensor":      sensor_state,
             "baby_stats":  baby_log.get_stats(),
-            "birth_date":  CFG.get("baby", {}).get("birth_date", ""),
+            "birth_date":  BABY.get("birth_date", ""),
         },
         ensure_ascii=False,
     ))
@@ -159,7 +168,7 @@ async def ws_handler(websocket: WebSocket):
 async def root():
     with open(_os.path.join(_STATIC_DIR, "index.html"), encoding="utf-8") as f:
         html = (f.read()
-                .replace("__MANAGER_PORT__", str(CFG.get("manager_port", 9091)))
+                .replace("__MANAGER_PORT__", str(MANAGER_PORT))
                 .replace("__CFG_VER__", _CFG_VER))
     return HTMLResponse(html)
 
@@ -239,7 +248,7 @@ async def internal_sensor_push(request: Request):
 @app.post("/api/sensor/refresh")
 async def post_sensor_refresh():
     """代理到 ble_service.py，触发设备重新推送所有传感器数据。"""
-    ble_port = CFG.get("ble_port", 8082)
+    ble_port = BLE_PORT
     try:
         req = urllib.request.Request(
             f"http://127.0.0.1:{ble_port}/api/sensor/refresh",
@@ -264,7 +273,7 @@ async def playback_page():
 async def get_public_config():
     """暴露给前端的少量只读配置项（避免泄漏密码 / RTSP URL 等敏感字段）。"""
     return JSONResponse({
-        "ble_poll_interval_s":   CFG.get("ble_poll_interval_s", 2),
+        "ble_poll_interval_s":   BLE_POLL_INTERVAL_S,
     })
 
 
@@ -317,7 +326,7 @@ async def get_recording_segments(date: str):
         last = mp4_files[-1]
         try:
             mtime = _os.path.getmtime(_os.path.join(vid_dir, last))
-            if (time.time() - mtime) < CFG.get("segment_s", 360):
+            if (time.time() - mtime) < SEGMENT_S:
                 in_progress.add(last)
         except OSError:
             in_progress.add(last)
@@ -351,12 +360,12 @@ async def get_recording_sensors(date: str):
 
 
 if __name__ == "__main__":
-    log.info(f"[SERVER] 启动 BabySentinel  http://{CFG['web_host']}:{CFG['web_port']}")
-    log.info(f"[SERVER] 本机访问: http://localhost:{CFG['web_port']}")
+    log.info(f"[SERVER] 启动 BabySentinel  http://{WEB_HOST}:{WEB_PORT}")
+    log.info(f"[SERVER] 本机访问: http://localhost:{WEB_PORT}")
     uvicorn.run(
         "services.web.server:app",
-        host=CFG["web_host"],
-        port=CFG["web_port"],
+        host=WEB_HOST,
+        port=WEB_PORT,
         log_level="warning",
         reload=False,
     )

@@ -7,10 +7,17 @@ from typing import Optional
 
 from bleak import BleakClient, BleakScanner
 
-from shared.config import CFG, CODE_FILE, log
+from shared.config import CODE_FILE, log
 from shared.state import sensor_state, broadcast, clear_ble_data
 from shared.alerts import trigger_alert
 from shared.i18n import t
+from services.ble.config import (
+    BLE_ADDRESS, BLE_MAC, BLE_DUMP_RAW,
+    BLE_SCAN_TIMEOUT_S, BLE_CONNECT_TIMEOUT_S, BLE_RECONNECT_DELAY_S,
+    BLE_POLL_INTERVAL_S,
+    PRONE_ALERT_THRESHOLD_S, PRONE_ALERT_COOLDOWN_S,
+    BREATH_ALERT_THRESHOLD_RATE, BREATH_ALERT_DURATION_S, BREATH_ALERT_COOLDOWN_S,
+)
 
 # ── BLE 协议常量 ──────────────────────────────────────────────────────
 
@@ -24,7 +31,7 @@ def _ts_be() -> bytes:
 def _uuid(prefix: str) -> str:
     # Sense-U 的 GATT 特征 UUID 末尾 12 hex 是设备 MAC。
     # macOS 上 ble_address 是 CoreBluetooth UUID（无法反推 MAC），需通过 ble_mac 单独提供。
-    mac = CFG.get("ble_mac") or CFG.get("ble_address", "")
+    mac = BLE_MAC or BLE_ADDRESS
     addr = mac.replace(":", "").replace("-", "").lower()[-12:]
     return f"{prefix}-{addr}"
 
@@ -79,10 +86,8 @@ async def parse_baby_data(data: bytes) -> None:
     if posture_id == 1:
         if _prone_since == 0:
             _prone_since = now
-        elapsed   = now - _prone_since
-        threshold = CFG.get("prone_alert_threshold_s", 30)
-        cooldown  = CFG.get("prone_alert_cooldown_s", 300)
-        if elapsed >= threshold and (now - _last_prone_alert) > cooldown:
+        elapsed = now - _prone_since
+        if elapsed >= PRONE_ALERT_THRESHOLD_S and (now - _last_prone_alert) > PRONE_ALERT_COOLDOWN_S:
             _last_prone_alert = now
             await trigger_alert(t("alert_prone", seconds=int(elapsed)), "danger")
     else:
@@ -103,9 +108,9 @@ async def parse_baby_data(data: bytes) -> None:
 
         # 呼吸停止 / 过低告警：持续 ≥ duration 秒 + cooldown
         # 注意：不区分贴身——设备未戴时 rate 也常为 0，会触发告警（这是用户要求的"奇怪数据就提醒"）
-        threshold_rate = CFG.get("breath_alert_threshold_rate", 8)
-        threshold_dur  = CFG.get("breath_alert_duration_s", 20)
-        breath_cd      = CFG.get("breath_alert_cooldown_s", 300)
+        threshold_rate = BREATH_ALERT_THRESHOLD_RATE
+        threshold_dur  = BREATH_ALERT_DURATION_S
+        breath_cd      = BREATH_ALERT_COOLDOWN_S
         now_b = time.time()
         if rate < threshold_rate:
             if _low_breath_since == 0:
@@ -152,7 +157,7 @@ async def request_refresh() -> bool:
 
 
 async def loop() -> None:
-    addr = CFG["ble_address"]
+    addr = BLE_ADDRESS
 
     while True:
         code = load_baby_code()
@@ -178,7 +183,7 @@ async def loop() -> None:
 
             async with BleakScanner(detection_callback=_detection_cb):
                 try:
-                    await asyncio.wait_for(found_evt.wait(), timeout=CFG.get("ble_scan_timeout_s", 20))
+                    await asyncio.wait_for(found_evt.wait(), timeout=BLE_SCAN_TIMEOUT_S)
                 except asyncio.TimeoutError:
                     pass
 
@@ -193,7 +198,7 @@ async def loop() -> None:
             _connect_ts = time.time()
 
             async with BleakClient(
-                device, timeout=CFG.get("ble_connect_timeout_s", 15),
+                device, timeout=BLE_CONNECT_TIMEOUT_S,
                 disconnected_callback=lambda _: disc_evt.set(),
             ) as client:
                 global _current_client
@@ -220,7 +225,7 @@ async def loop() -> None:
                 def _wrap(name: str, handler):
                     """如开 ble_dump_raw，先 hex dump 再交给原 handler。"""
                     async def _aw(s, raw):
-                        if CFG.get("ble_dump_raw"):
+                        if BLE_DUMP_RAW:
                             log.info(f"[BLE] RX {name}: {bytes(raw).hex(' ')}")
                         await handler(s, raw)
                     return _aw
@@ -268,7 +273,7 @@ async def loop() -> None:
                     pass
 
                 # 主循环：每 N 秒 polling 一次 0xBA
-                _POLL_S = CFG.get("ble_poll_interval_s", 2)
+                _POLL_S = BLE_POLL_INTERVAL_S
                 while not disc_evt.is_set():
                     try:
                         await asyncio.wait_for(disc_evt.wait(), timeout=_POLL_S)
@@ -292,6 +297,6 @@ async def loop() -> None:
         sensor_state.update(ble_ok=False)
         clear_ble_data()
         await broadcast({"type": "sensor", **sensor_state})
-        delay = CFG.get("ble_reconnect_delay_s", 10)
+        delay = BLE_RECONNECT_DELAY_S
         log.debug(f"[BLE] {delay} 秒后重连...")
         await asyncio.sleep(delay)

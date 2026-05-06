@@ -28,7 +28,7 @@ _VOICES = {
 }
 
 
-def _mp3_bytes_to_wav(mp3_bytes: bytes, sample_rate: int = 32000) -> bytes:
+def _mp3_bytes_to_wav(mp3_bytes: bytes, sample_rate: int = 16000) -> bytes:
     import tempfile
     from pathlib import Path
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:

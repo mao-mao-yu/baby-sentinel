@@ -13,7 +13,7 @@ from bleak.backends.scanner import AdvertisementData
 
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-with open(os.path.join(_ROOT, "config.json"), encoding="utf-8") as _f:
+with open(os.path.join(_ROOT, "services", "ble", "config.json"), encoding="utf-8") as _f:
     TARGET = json.load(_f)["ble_address"]
 
 seen_hashes: set = set()

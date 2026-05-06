@@ -40,9 +40,12 @@ from agent.config import (
     MAX_RECORD_S,
     REQUEST_TIMEOUT_S,
     COOLDOWN_S,
+    KEEPALIVE_NOISE,
+    KEEPALIVE_NOISE_AMP,
 )
 from agent.audio_capture import AudioCapture
 from agent.playback import Playback
+from agent.white_noise import WhiteNoiseKeepAlive
 
 log = logging.getLogger("VoiceAgent")
 logging.basicConfig(
@@ -110,7 +113,11 @@ async def run(device_index: int | None = None) -> None:
     model_key = Path(WAKE_MODEL_PATH).stem
 
     capture  = AudioCapture(device_index)
-    playback = Playback()
+    white_noise: WhiteNoiseKeepAlive | None = None
+    if KEEPALIVE_NOISE:
+        white_noise = WhiteNoiseKeepAlive(amplitude=KEEPALIVE_NOISE_AMP)
+        white_noise.start()
+    playback = Playback(white_noise=white_noise)
     stream   = capture.open_stream()
     cooldown_until  = 0.0
     confirm_counter = 0
@@ -195,6 +202,8 @@ async def run(device_index: int | None = None) -> None:
         stream.close()
         capture.close()
         playback.close()
+        if white_noise:
+            white_noise.stop()
 
 
 if __name__ == "__main__":

@@ -13,7 +13,8 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 
-from shared.config import BASE_DIR, CFG, log
+from shared.config import BASE_DIR, log
+from services.web.config import BABY
 
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 DB_FILE = os.path.join(LOG_DIR, "baby_log.db")
@@ -301,8 +302,7 @@ def get_stats() -> dict:
     diapers  = [e for e in entries if e.get("type") == "diaper"]
     sleeps   = [e for e in entries if e.get("type") == "sleep"]
 
-    baby_cfg     = CFG.get("baby", {})
-    interval_min = int(baby_cfg.get("feed_interval_min", 150))
+    interval_min = int(BABY.get("feed_interval_min", 150))
 
     # ── 所有喂奶（倒计时用，跨日连续）────
     last_feed = feeds[-1] if feeds else None
@@ -337,16 +337,16 @@ def get_stats() -> dict:
 
     # ── 推荐喂奶量 ────────────────────────
     rec_ml     = None
-    weight_g   = int(baby_cfg.get("weight_g", 0))
+    weight_g   = int(BABY.get("weight_g", 0))
     age_days   = 0
-    bd = _parse_birth_date(baby_cfg.get("birth_date", ""))
+    bd = _parse_birth_date(BABY.get("birth_date", ""))
     if bd:
         try:
             age_days = (date.today() - bd).days
         except Exception:
             pass
 
-    feed_type = baby_cfg.get("feed_type", "formula")
+    feed_type = BABY.get("feed_type", "formula")
     if feed_type == "formula":
         if weight_g and interval_min:
             feeds_per_day = round(24 * 60 / interval_min)

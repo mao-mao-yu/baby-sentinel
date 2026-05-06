@@ -4,7 +4,7 @@ import sys
 import urllib.request
 
 import shared.state as state
-from shared.config import BASE_DIR, CFG, log
+from shared.config import BASE_DIR, ROOT_CFG, log
 
 # ── go2rtc 配置生成 ───────────────────────────────────────────────────
 
@@ -31,8 +31,8 @@ async def _check_go2rtc(port: int) -> bool:
 # ── go2rtc 进程循环 ───────────────────────────────────────────────────
 
 async def rtsp_loop() -> None:
-    url  = CFG["tapo_rtsp"]
-    port = CFG["go2rtc_port"]
+    url  = ROOT_CFG["tapo_rtsp"]
+    port = ROOT_CFG["go2rtc_port"]
     if "YOUR_PASSWORD" in url:
         log.warning("[go2rtc] config.json 中 tapo_rtsp 未配置，跳过视频流")
         return

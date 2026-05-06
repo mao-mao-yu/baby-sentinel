@@ -36,5 +36,11 @@ SILENCE_S:    float = _get("voice_silence_s",   2.0)
 MAX_RECORD_S: float = _get("voice_max_record_s", 15.0)
 
 # ── Network ───────────────────────────────────────────────────────────
-REQUEST_TIMEOUT_S: float = 30.0
+# 90s 余量：M2.7 thinking 模型在多事件请求下 LLM 阶段 ~30s + TTS 合成 ~10-20s + 网络 + WAV 传输。
+REQUEST_TIMEOUT_S: float = 90.0
 COOLDOWN_S:        float = _get("wake_cooldown_s", 3.0)
+
+# ── 白噪保活 / Bluetooth speaker keep-alive ─────────────────────────────
+# 持续在默认输出播放极低音量白噪，防止蓝牙音响因长时间静默自动断连。
+KEEPALIVE_NOISE:     bool  = bool(_get("keepalive_noise", False))
+KEEPALIVE_NOISE_AMP: float = float(_get("keepalive_noise_amplitude", 0.005))

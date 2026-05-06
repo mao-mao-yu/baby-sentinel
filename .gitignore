@@ -43,6 +43,6 @@ wakeword_training/
 
 # ── Voice ─────────────────────────────────────────────────────────────
 # Auto-generated beep sounds
-voice/agent/sounds/
+agent/sounds/
 # Pi-side .env if any
-voice/agent/.env
+agent/.env

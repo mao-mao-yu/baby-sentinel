@@ -21,10 +21,8 @@ from fastapi.responses import JSONResponse
 
 import shared.state as state
 from services.ble import protocol as ble
-from shared.config import CFG, log
-
-BLE_PORT = CFG.get("ble_port", 8082)
-WEB_PORT = CFG.get("web_port", 8080)
+from shared.config import log
+from services.ble.config import BLE_PORT, WEB_PORT
 
 # ── 广播替代：HTTP 推送到 server.py ───────────────────────────────────
 

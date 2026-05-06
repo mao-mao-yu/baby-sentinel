@@ -11,7 +11,6 @@
 
 import asyncio
 import atexit
-import json
 import os
 import subprocess
 import sys
@@ -27,19 +26,15 @@ from fastapi.staticfiles import StaticFiles
 
 # ── 配置 ──────────────────────────────────────────────────────────────
 
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+from shared.config import ROOT_CFG, BASE_DIR
 
-with open(CONFIG_FILE, encoding="utf-8") as _f:
-    CFG = json.load(_f)
-
-MANAGER_PORT = CFG.get("manager_port", 9091)
+MANAGER_PORT = ROOT_CFG.get("manager_port", 9091)
 _GO2RTC_EXE  = "go2rtc.exe" if sys.platform == "win32" else "go2rtc"
 
 # Pi remote agent config (optional — leave empty to skip Pi托管)
-_PI_HOST = CFG.get("pi_host", "")
-_PI_USER = CFG.get("pi_user", "pi")
-_PI_KEY  = os.path.expanduser(CFG.get("pi_ssh_key", "~/.ssh/pi_key"))
+_PI_HOST = ROOT_CFG.get("pi_host", "")
+_PI_USER = ROOT_CFG.get("pi_ssh_user", "pi")
+_PI_KEY  = os.path.expanduser(ROOT_CFG.get("pi_ssh_key", "~/.ssh/pi_key"))
 
 import shutil as _shutil
 _SSH_BIN = _shutil.which("ssh") or "ssh"
@@ -51,7 +46,7 @@ _PROC_GROUP_KW: dict = (
     if sys.platform == "win32"
     else {"start_new_session": True}
 )
-_go2rtc_p    = CFG.get("go2rtc_path", "").strip()
+_go2rtc_p    = ROOT_CFG.get("go2rtc_path", "").strip()
 if _go2rtc_p:
     GO2RTC_BIN = _go2rtc_p if os.path.isabs(_go2rtc_p) else os.path.join(BASE_DIR, _go2rtc_p)
 else:
@@ -59,9 +54,9 @@ else:
 
 
 def _gen_go2rtc_yaml():
-    tapo_url  = CFG.get("tapo_rtsp", "")
-    audio_url = CFG.get("pi_audio_rtsp", "").strip()  # rtsp://pi_ip:8554/respeaker
-    port      = CFG.get("go2rtc_port", 1984)
+    tapo_url  = ROOT_CFG.get("tapo_rtsp", "")
+    audio_url = ROOT_CFG.get("pi_audio_rtsp", "").strip()  # rtsp://pi_host:8554/respeaker
+    port      = ROOT_CFG.get("go2rtc_port", 1984)
     path      = os.path.join(BASE_DIR, "go2rtc.yaml")
 
     if audio_url:
@@ -88,10 +83,10 @@ SERVICES: dict[str, dict] = {
     "go2rtc": {
         "name":       "go2rtc",
         "icon":       "📹",
-        "desc":       f"摄像头 RTSP → WebRTC   :{CFG.get('go2rtc_port', 1984)}",
+        "desc":       f"摄像头 RTSP → WebRTC   :{ROOT_CFG.get('go2rtc_port', 1984)}",
         "cmd":        [GO2RTC_BIN, "-config", "go2rtc.yaml"],
         "pre_start":  _gen_go2rtc_yaml,
-        "port":       CFG.get("go2rtc_port", 1984),
+        "port":       ROOT_CFG.get("go2rtc_port", 1984),
         # adoptable: manager 重启时不杀 → recorder 的 ffmpeg 不会因 RTSP 断流退出
         "adoptable":  True,
         "script":     "bin/go2rtc",
@@ -99,16 +94,19 @@ SERVICES: dict[str, dict] = {
     "ble": {
         "name":       "BLE Sensor",
         "icon":       "📡",
-        "desc":       f"Sense-U 蓝牙传感器   :{CFG.get('ble_port', 8082)}",
+        "desc":       f"Sense-U 蓝牙传感器   :{ROOT_CFG.get('ble_port', 8082)}",
         "cmd":        [sys.executable, "-u", "services/ble/service.py"],
-        "port":       CFG.get("ble_port", 8082),
+        "port":       ROOT_CFG.get("ble_port", 8082),
+        # adoptable: manager 重启时不杀 → 蓝牙连接不中断（BLE 重连要 10-30s）
+        "adoptable":  True,
+        "script":     "services/ble/service.py",
     },
     "server": {
         "name":       "BabySentinel Server",
         "icon":       "🍼",
-        "desc":       f"Web · 摄像头 · 提醒 · Discord   :{CFG.get('web_port', 8080)}",
+        "desc":       f"Web · 摄像头 · 提醒 · Discord   :{ROOT_CFG.get('web_port', 8080)}",
         "cmd":        [sys.executable, "-u", "services/web/server.py"],
-        "port":       CFG.get("web_port", 8080),
+        "port":       ROOT_CFG.get("web_port", 8080),
     },
     "recorder": {
         "name":       "Recorder",
@@ -123,9 +121,12 @@ SERVICES: dict[str, dict] = {
     "voice": {
         "name":       "Voice Service",
         "icon":       "🎙",
-        "desc":       f"Whisper STT · MiniMax LLM · TTS   :{CFG.get('voice_service_port', 8001)}",
+        "desc":       f"Whisper STT · MiniMax LLM · TTS   :{ROOT_CFG.get('voice_service_port', 8001)}",
         "cmd":        [sys.executable, "-u", "services/voice/voice_service.py"],
-        "port":       CFG.get("voice_service_port", 8001),
+        "port":       ROOT_CFG.get("voice_service_port", 8001),
+        # adoptable: manager 重启时不杀 → 避免 Whisper 模型重新加载（large-v3 加载耗时 30s+）
+        "adoptable":  True,
+        "script":     "services/voice/voice_service.py",
     },
     "voice_agent": {
         "name":       "Voice Agent (Pi)",
@@ -436,9 +437,17 @@ def _scan_and_kill_orphans() -> None:
         if defn.get("adoptable") and defn.get("script")
     }
 
+    # 包含历史路径 recorder_service.py（重构前），避免老进程漏扫成幽灵
+    _orphan_pattern = (
+        "services/ble/service.py"
+        "|services/recorder/service.py"
+        "|services/web/server.py"
+        "|services/voice/voice_service.py"
+        "|recorder_service\\.py"
+    )
     try:
         out = subprocess.check_output(
-            ["pgrep", "-f", "services/ble/service.py|services/recorder/service.py|services/web/server.py"],
+            ["pgrep", "-f", _orphan_pattern],
             text=True, stderr=subprocess.DEVNULL, timeout=5,
         )
     except Exception:
@@ -478,14 +487,14 @@ def _scan_and_kill_orphans() -> None:
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     _scan_and_kill_orphans()
-    for svc in ("go2rtc", "ble", "server", "recorder"):
+    for svc in ("go2rtc", "ble", "server", "recorder", "voice"):
         await asyncio.sleep(0.3)
         await _do_start(svc)
     try:
         yield
     finally:
         # adoptable 服务（如 recorder）保留运行——下次 manager 启动时接管，避免录像中断
-        for svc in ("recorder", "server", "ble", "go2rtc"):
+        for svc in ("voice", "recorder", "server", "ble", "go2rtc"):
             if SERVICES[svc].get("adoptable"):
                 proc = _procs.get(svc)
                 if proc and proc.returncode is None:
@@ -524,7 +533,7 @@ _CFG_VER = str(int(time.time()))
 async def index():
     with open(os.path.join(BASE_DIR, "services", "web", "static", "manager.html"), encoding="utf-8") as f:
         html = (f.read()
-                .replace("__WEB_PORT__", str(CFG.get("web_port", 8080)))
+                .replace("__WEB_PORT__", str(ROOT_CFG.get("web_port", 8080)))
                 .replace("__CFG_VER__", _CFG_VER))
     return HTMLResponse(html)
 

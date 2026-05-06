@@ -11,7 +11,7 @@ from bleak import BleakClient
 
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-with open(os.path.join(_ROOT, "config.json"), encoding="utf-8") as _f:
+with open(os.path.join(_ROOT, "services", "ble", "config.json"), encoding="utf-8") as _f:
     ADDRESS = json.load(_f)["ble_address"]
 
 

@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 
-from shared.config import ALERT_MAX_LOG, CFG, log
+from shared.config import ALERT_MAX_LOG, ROOT_CFG, log
 from shared.state import alert_log, broadcast
 
 
@@ -12,9 +12,9 @@ async def notify_qq(message: str) -> None:
 
 async def notify_discord(message: str, level: str = "warning") -> None:
     from shared.notify.discord_send import send_alert
-    token       = CFG.get("discord_token", "")
-    channel_ids = CFG.get("discord_channel_ids", [])
-    user_ids    = CFG.get("discord_user_ids", [])
+    token       = ROOT_CFG.get("discord_token", "")
+    channel_ids = ROOT_CFG.get("discord_channel_ids", [])
+    user_ids    = ROOT_CFG.get("discord_user_ids", [])
     if not token or (not channel_ids and not user_ids):
         return
     loop = asyncio.get_event_loop()
@@ -25,8 +25,8 @@ async def notify_discord(message: str, level: str = "warning") -> None:
 
 async def notify_bark(message: str, level: str = "warning") -> None:
     from shared.notify.bark_send import send_bark
-    keys   = CFG.get("bark_keys", [])
-    server = CFG.get("bark_server_url", "https://api.day.app")
+    keys   = ROOT_CFG.get("bark_keys", [])
+    server = ROOT_CFG.get("bark_server_url", "https://api.day.app")
     if not keys:
         return
     loop = asyncio.get_event_loop()

@@ -27,14 +27,12 @@ import urllib.request
 from datetime import date
 
 from shared import sensors_db
-from shared.config import BASE_DIR, CFG, REC_DIR, log
+from shared.config import BASE_DIR, ROOT_CFG, REC_DIR, log
 from shared.video_util import is_complete_mp4
-
-# ── 配置 ──────────────────────────────────────────────────────────────
-
-SEGMENT_S  = CFG.get("segment_s", 180)
-# 传感器写入与 BLE 轮询同频，每次成功轮询都落库
-BLE_POLL_S = CFG.get("ble_poll_interval_s", 2)
+from services.recorder.config import (
+    SEGMENT_S, BLE_POLL_INTERVAL_S as BLE_POLL_S,
+    FFMPEG_PATH, TAPO_RTSP, WEB_PORT,
+)
 # 残缺 mp4 清理：每 10 分钟扫一遍；mtime 早于这个阈值且无 moov 的视为崩溃残留
 CLEANUP_INTERVAL_S      = 600
 CLEANUP_AGE_THRESHOLD_S = max(SEGMENT_S * 2, 300)
@@ -49,7 +47,7 @@ def _day_dir(d: date | None = None) -> str:
 
 
 def _ffmpeg_bin() -> str | None:
-    p = CFG.get("ffmpeg_path", "").strip()
+    p = (FFMPEG_PATH or "").strip()
     if p:
         full = p if os.path.isabs(p) else os.path.join(BASE_DIR, p)
         if os.path.exists(full):
@@ -71,7 +69,7 @@ def _http_get(url: str) -> dict | None:
 
 
 def _go2rtc_ready() -> bool:
-    port = CFG.get("go2rtc_port", 1984)
+    port = ROOT_CFG.get("go2rtc_port", 1984)
     return _http_get(f"http://127.0.0.1:{port}/api/streams") is not None
 
 
@@ -97,7 +95,7 @@ async def _terminate_proc(proc: asyncio.subprocess.Process, name: str = "proc",
 # ── 传感器记录 ────────────────────────────────────────────────────────
 
 async def sensor_record_loop() -> None:
-    port = CFG.get("web_port", 8080)
+    port = WEB_PORT
     url  = f"http://127.0.0.1:{port}/api/sensor"
     log.info(f"[Sensor] 传感器记录启动 (interval={BLE_POLL_S}s, db=logs/sensors.db)")
 
@@ -167,7 +165,7 @@ async def video_cleanup_loop() -> None:
 # ── 摄像头录像 ────────────────────────────────────────────────────────
 
 async def camera_record_loop() -> None:
-    rtsp = CFG.get("tapo_rtsp", "")
+    rtsp = TAPO_RTSP
     if "YOUR_PASSWORD" in rtsp:
         log.warning("[Camera] tapo_rtsp 未配置，跳过录像")
         return

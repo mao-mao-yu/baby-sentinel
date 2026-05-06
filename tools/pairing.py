@@ -24,8 +24,8 @@ _ROOT     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CODE_FILE = os.path.join(_ROOT, "baby_code.json")
 LOG_FILE  = os.path.join(_ROOT, "logs", "ble_protocol.log")
 
-# 从主项目 config.json 读取 ble_address (扫描/连接) 与 ble_mac (拼 UUID)
-with open(os.path.join(_ROOT, "config.json"), encoding="utf-8") as _f:
+# 从 services/ble/config.json 读取 ble_address (扫描/连接) 与 ble_mac (拼 UUID)
+with open(os.path.join(_ROOT, "services", "ble", "config.json"), encoding="utf-8") as _f:
     _CFG = json.load(_f)
 ADDRESS = _CFG["ble_address"]
 _MAC_HEX = (_CFG.get("ble_mac") or _CFG.get("ble_address", "")) \
