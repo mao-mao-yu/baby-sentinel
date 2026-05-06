@@ -60,21 +60,22 @@ def _gen_go2rtc_yaml():
     path      = os.path.join(BASE_DIR, "go2rtc.yaml")
 
     if audio_url:
-        # ReSpeaker available: merge TAPO video + Pi audio (video path unchanged, no latency hit)
-        stream_entry = (
-            f"ffmpeg:-rtsp_transport tcp -i {tapo_url} "
-            f"-rtsp_transport tcp -i {audio_url} "
-            f"-map 0:v:0 -map 1:a:0 -c:v copy -c:a copy -f rtsp pipe:1"
+        # 多源轨道路由：go2rtc 把两个 RTSP 源直接合成一条流，不经 ffmpeg 转码 ——
+        # 比之前 `ffmpeg -map ... -f rtsp pipe:1` 的方案少一个 ffmpeg 进程 +
+        # 少一次 pipe 缓冲，能省 ~50-150ms。
+        # #media=video / #media=audio 在源头丢掉不需要的轨道。
+        body = (
+            "streams:\n"
+            "  baby:\n"
+            f"    - {tapo_url}#media=video\n"
+            f"    - {audio_url}#media=audio\n"
         )
     else:
-        # No Pi audio configured: use TAPO stream as-is (video + TAPO built-in audio)
-        stream_entry = tapo_url
+        # 未配置 Pi 音频：直接用 Tapo（视频 + Tapo 自带麦克风音频）
+        body = f"streams:\n  baby: {tapo_url}\n"
 
     with open(path, "w", encoding="utf-8") as f:
-        f.write(
-            f"streams:\n  baby: {stream_entry}\n\n"
-            f"api:\n  listen: :{port}\n  origin: '*'\n"
-        )
+        f.write(f"{body}\napi:\n  listen: :{port}\n  origin: '*'\n")
 
 
 # ── 服务定义 ──────────────────────────────────────────────────────────

@@ -367,6 +367,125 @@ Discord Bot 提供两个 Slash command：
 
 ---
 
+## Pi 麦克风音频接入（替代 Tapo 内置麦）
+
+如果你在 Pi 上接了 ReSpeaker 等 USB 麦克风（音质比 Tapo 内置麦好得多），可以让监控页同时显示 Tapo 视频 + Pi 麦音频，端到端延迟在 100~200ms。
+
+### 工作原理
+
+```
+ReSpeaker → Pi ALSA → ffmpeg(libopus 32k) → mediamtx RTSP → 服务端 go2rtc
+                                                              ↑
+                                              Tapo RTSP ──────┤   多源轨道路由
+                                                              ↓     (无转码)
+                                                          baby 流 → 浏览器 WebRTC
+```
+
+服务端 go2rtc 用**多源轨道路由**直接合并两路 RTP，不经 ffmpeg 转码。比"服务端再起一个 ffmpeg 做 remux"的方案少 50~150ms 延迟。
+
+### Pi 端准备
+
+1. 装 ffmpeg + mediamtx：
+
+   ```bash
+   sudo apt install ffmpeg
+   # 从 https://github.com/bluenviron/mediamtx/releases 下载对应架构二进制
+   # 假设放在 ~/mediamtx/
+   ```
+
+2. 写最小 `mediamtx.yml`（只允许 publisher 推流到 `respeaker` 路径）：
+
+   ```yaml
+   paths:
+     respeaker:
+       source: publisher
+   ```
+
+3. 找到 ReSpeaker 的 ALSA 设备号：
+
+   ```bash
+   arecord -l
+   # 比如显示 card 1: ArrayUAC10 ...  → 设备名 plughw:1,0
+   ```
+
+4. 启动 mediamtx 和 streamer（两个终端）：
+
+   ```bash
+   ~/mediamtx/mediamtx ~/mediamtx/mediamtx.yml
+   bash agent/pi_streamer.sh plughw:1,0
+   ```
+
+   或者 systemd 化（强烈推荐 24/7 跑）：
+
+   ```ini
+   # /etc/systemd/system/pi-streamer.service
+   [Unit]
+   Description=BabySentinel Pi audio streamer
+   After=network.target sound.target
+
+   [Service]
+   ExecStart=/bin/bash /home/pi/baby-sentinel/agent/pi_streamer.sh plughw:1,0
+   Restart=always
+   RestartSec=3
+   User=pi
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   ```bash
+   sudo systemctl enable --now pi-streamer mediamtx
+   ```
+
+### 服务端配置
+
+在根 `config.json` 填 `pi_audio_rtsp`：
+
+```json
+{
+  "pi_host": "192.168.0.20",
+  "pi_audio_rtsp": "rtsp://192.168.0.20:8554/respeaker"
+}
+```
+
+下次 manager 重启 go2rtc 时会自动生成多源 `go2rtc.yaml`：
+
+```yaml
+streams:
+  baby:
+    - rtsp://maomaoyu:***@192.168.0.116:554/stream1#media=video
+    - rtsp://192.168.0.20:8554/respeaker#media=audio
+```
+
+`#media=video` / `#media=audio` 是 go2rtc 的轨道过滤器，源头丢掉不要的轨道（Tapo 那糟糕的内置音频、mediamtx 的空视频轨）。
+
+### 延迟预算
+
+| 链路 | 延迟 |
+|---|---|
+| ReSpeaker → ALSA 采集 | 10~30ms |
+| ALSA → libopus 编码（20ms 帧 + lowdelay）| ~20ms |
+| Pi → 服务端 LAN（UDP RTP）| 5~10ms |
+| go2rtc 轨道路由（无转码）| <5ms |
+| go2rtc → 浏览器 WebRTC | 50~150ms |
+| **Pi 音频端到端** | **~100~200ms** |
+
+Tapo 视频走原路径（200~400ms）。**音频通常会比视频早到 50~150ms**——这个 lipsync 误差对婴儿监控感受不到，对哭声预警反而是好事（音频先于视频抵达你耳朵）。
+
+### 为什么不用 AAC
+
+- AAC 编码器有 ~20ms lookahead（即使 lowdelay 模式也无法消除 LATM 的容器开销）
+- AAC 不是 WebRTC 原生 codec，go2rtc 必须转码到 Opus 才能发给浏览器（再 +20~40ms）
+- 婴儿监控带宽要求极低（哭/呼吸 32 kbps mono 完全够用），AAC 128k 是 4 倍浪费
+
+切到 Opus 后，从 Pi 一路到浏览器**全程不转码**。
+
+### 录像录到的音频
+
+录像服务 [services/recorder/service.py](services/recorder/service.py) 在写 mp4 时统一转码到 AAC（`-c:a aac -b:a 32k`），Opus 输入兼容，无需改动。回放时显示的就是 Pi 麦的清晰音频。
+
+---
+
 ## 录像文件
 
 录像保存在 `recordings/` 目录，按日期分组：
