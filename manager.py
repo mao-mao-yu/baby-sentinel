@@ -54,9 +54,19 @@ else:
 
 
 def _gen_go2rtc_yaml():
-    tapo_url  = ROOT_CFG.get("tapo_rtsp", "")
-    audio_url = ROOT_CFG.get("pi_audio_rtsp", "").strip()  # rtsp://pi_host:8554/respeaker
-    port      = ROOT_CFG.get("go2rtc_port", 1984)
+    # 每次重新读 config.json，让 pi_audio_rtsp 等运行时改动无需 restart manager。
+    # ROOT_CFG 是 import 期 cache 的，pre_start 这里走 disk 读最新值。
+    cfg_path = os.path.join(BASE_DIR, "config.json")
+    try:
+        import json as _json
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = _json.load(f)
+    except Exception:
+        cfg = ROOT_CFG  # 兜底：disk 读失败回退到 cache
+
+    tapo_url  = cfg.get("tapo_rtsp", "")
+    audio_url = cfg.get("pi_audio_rtsp", "").strip()  # rtsp://pi_host:8554/respeaker
+    port      = cfg.get("go2rtc_port", 1984)
     path      = os.path.join(BASE_DIR, "go2rtc.yaml")
 
     if audio_url:
