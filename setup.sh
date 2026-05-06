@@ -132,11 +132,24 @@ if [[ -f "config.json" ]]; then
 else
     cp config.example.json config.json
     green "已从 config.example.json 复制 → config.json"
-    yellow "请编辑 config.json 填写以下必填项:"
-    yellow "  ble_address         Sense-U 蓝牙地址 (工具: python tools/scan.py)"
-    yellow "  tapo_rtsp           摄像头 RTSP 地址"
-    yellow "  baby.birth_date     宝宝生日 (YYYYMMDD)"
 fi
+
+# Per-service config: 各服务首启时也会自动 fallback，但提前 copy 一份方便用户预编辑
+for svc in ble recorder voice web; do
+    src="services/$svc/config.example.json"
+    dst="services/$svc/config.json"
+    if [[ -f "$dst" ]]; then
+        green "services/$svc/config.json 已存在，跳过"
+    elif [[ -f "$src" ]]; then
+        cp "$src" "$dst"
+        green "已复制 services/$svc/config.example.json → config.json"
+    fi
+done
+
+yellow "请编辑配置填写必填项:"
+yellow "  config.json:                       tapo_rtsp、baby.birth_date"
+yellow "  services/ble/config.json:          ble_address  (扫描: ./venv/bin/python tools/scan.py)"
+yellow "  services/voice/config.json:        minimax_api_key 或 deepseek_api_key（如启用语音）"
 
 # ── 7. 目录结构 ───────────────────────────────────────────────────────
 step "创建运行时目录"
@@ -204,8 +217,8 @@ echo "    ./venv/bin/python services/web/server.py                    # 仅主�
 echo "    ./venv/bin/python services/voice/voice_service.py  # 语音服务 http://localhost:8001  (需 --voice)"
 echo ""
 echo "  语音助手设置:"
-echo "    1. 运行 bash setup.sh --voice         安装 Whisper/TTS 依赖"
-echo "    2. 编辑 config.json                   填写 minimax_api_key、whisper_device 等"
-echo "    3. 启动 services/voice/voice_service.py（本机，服务端）"
+echo "    1. 运行 bash setup.sh --voice              安装 Whisper/TTS 依赖"
+echo "    2. 编辑 services/voice/config.json         填写 llm_provider、minimax_api_key 或 deepseek_api_key 等"
+echo "    3. 启动 services/voice/voice_service.py    （本机，服务端）"
 echo "    4. 在 Pi 上安装 agent/requirements.txt 并运行 voice_agent.py"
 echo ""

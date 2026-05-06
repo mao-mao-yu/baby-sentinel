@@ -127,17 +127,30 @@ if not c.get("ffmpeg_path"):
 }
 
 # ── 6. Config file ────────────────────────────────────────────────────
-Write-Step "Initializing config file"
+Write-Step "Initializing config files"
 if (Test-Path "config.json") {
     Write-Ok "config.json already exists, skipping"
 } else {
     Copy-Item "config.example.json" "config.json"
     Write-Ok "Copied config.example.json -> config.json"
-    Write-Warn "Please edit config.json and fill in:"
-    Write-Warn "  ble_address         Sense-U BLE address (tool: tools\scan_ble.py)"
-    Write-Warn "  tapo_rtsp           Camera RTSP URL"
-    Write-Warn "  baby.birth_date     Baby's birthday (YYYYMMDD)"
 }
+
+# Per-service config: services auto-fallback at first start, but pre-copying lets users edit beforehand
+foreach ($svc in @("ble", "recorder", "voice", "web")) {
+    $src = "services\$svc\config.example.json"
+    $dst = "services\$svc\config.json"
+    if (Test-Path $dst) {
+        Write-Ok "services\$svc\config.json already exists, skipping"
+    } elseif (Test-Path $src) {
+        Copy-Item $src $dst
+        Write-Ok "Copied services\$svc\config.example.json -> config.json"
+    }
+}
+
+Write-Warn "Please edit configs and fill in:"
+Write-Warn "  config.json:                  tapo_rtsp, baby.birth_date"
+Write-Warn "  services\ble\config.json:     ble_address  (scan with: .\venv\Scripts\python.exe tools\scan.py)"
+Write-Warn "  services\voice\config.json:   minimax_api_key or deepseek_api_key (if voice is enabled)"
 
 # ── 7. Runtime directories ────────────────────────────────────────────
 Write-Step "Creating runtime directories"
@@ -150,7 +163,7 @@ Write-Ok "logs/  recordings/  bin/"
 Write-Step "Voice Service dependencies"
 if ($Voice) {
     Write-Ok "-Voice flag detected, installing voice/service deps …"
-    & $PIP install -r voice\requirements.txt
+    & $PIP install -r services\voice\requirements.txt
     Write-Ok "Voice service deps installed"
     Write-Warn "For GPU (CUDA) Whisper inference, install CUDA-enabled PyTorch first:"
     Write-Warn "  https://pytorch.org/get-started/locally/"
@@ -182,13 +195,13 @@ Write-Host ""
 Write-Host "  Setup complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Start with:" -ForegroundColor White
-Write-Host "    .\venv\Scripts\python.exe manager.py                  # Manager UI  http://localhost:9091" -ForegroundColor DarkGray
-Write-Host "    .\venv\Scripts\python.exe services\web\server.py                # Main server http://localhost:8080" -ForegroundColor DarkGray
-Write-Host "    .\venv\Scripts\python.exe voice\voice_service.py          # Voice Service http://localhost:8001  (if -Voice was used)" -ForegroundColor DarkGray
+Write-Host "    .\venv\Scripts\python.exe manager.py                          # Manager UI  http://localhost:9091" -ForegroundColor DarkGray
+Write-Host "    .\venv\Scripts\python.exe services\web\server.py              # Main server http://localhost:8080" -ForegroundColor DarkGray
+Write-Host "    .\venv\Scripts\python.exe services\voice\voice_service.py     # Voice Service http://localhost:8001  (if -Voice was used)" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  Voice assistant (after setting up voice deps):" -ForegroundColor White
-Write-Host "    1. Run .\setup.ps1 -Voice    to install Whisper/TTS deps" -ForegroundColor DarkGray
-Write-Host "    2. Edit config.json          set minimax_api_key, whisper_device, etc." -ForegroundColor DarkGray
-Write-Host "    3. Start voice_service.py    server side (this machine)" -ForegroundColor DarkGray
-Write-Host "    4. Start voice_agent.py      on Raspberry Pi / macOS with mic" -ForegroundColor DarkGray
+Write-Host "    1. Run .\setup.ps1 -Voice               to install Whisper/TTS deps" -ForegroundColor DarkGray
+Write-Host "    2. Edit services\voice\config.json      set llm_provider, minimax_api_key or deepseek_api_key, etc." -ForegroundColor DarkGray
+Write-Host "    3. Start services\voice\voice_service.py  server side (this machine)" -ForegroundColor DarkGray
+Write-Host "    4. Start agent\voice_agent.py           on Raspberry Pi / macOS with mic" -ForegroundColor DarkGray
 Write-Host ""
