@@ -536,24 +536,10 @@ const CONFIG_SCHEMA = {
       label: { zh: 'ffmpeg 可执行路径', ja: 'ffmpeg バイナリパス' } },
   ],
   voice: [
-    { key: 'voice_service_url', type: 'string',
-      label: { zh: 'Voice 服务 URL', ja: 'Voice サービス URL' } },
+    // Pi 上的语音客户端已退役（commit 77265ed）；这里只保留 server 自身用得上的字段。
+    // 如果未来重新接入 wake-word / VAD 客户端，再把 wake_* / voice_silence_* 加回来。
     { key: 'voice_service_port', type: 'int',
       label: { zh: 'Voice 服务端口', ja: 'Voice サービスポート' } },
-    { key: 'wake_threshold', type: 'number',
-      label: { zh: '唤醒阈值 (0–1)', ja: 'ウェイクしきい値 (0–1)' } },
-    { key: 'wake_confirm_frames', type: 'int',
-      label: { zh: '唤醒确认帧数', ja: 'ウェイク確認フレーム数' } },
-    { key: 'wake_peak_threshold', type: 'number',
-      label: { zh: '唤醒峰值阈值 (0–1)', ja: 'ウェイクピークしきい値 (0–1)' } },
-    { key: 'wake_cooldown_s', type: 'number',
-      label: { zh: '唤醒冷却 (秒)', ja: 'ウェイククールダウン (秒)' } },
-    { key: 'voice_silence_rms', type: 'number',
-      label: { zh: '静音 RMS', ja: '無音 RMS' } },
-    { key: 'voice_silence_s', type: 'number',
-      label: { zh: '静音持续 (秒)', ja: '無音継続 (秒)' } },
-    { key: 'voice_max_record_s', type: 'number',
-      label: { zh: '最大录音时长 (秒)', ja: '最大録音時間 (秒)' } },
   ],
 };
 

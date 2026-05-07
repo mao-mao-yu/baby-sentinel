@@ -603,52 +603,34 @@ baby-sentinel/
 
 ---
 
-## 语音助手
+## 语音助手（服务端）
 
-基于唤醒词 + Whisper STT + MiniMax LLM + TTS 的全双工育儿语音日记，说一句话自动写入育儿日志并语音反馈。
+`services/voice/voice_service.py` 提供 **STT → LLM tool calling → TTS** 的 HTTP API（端口 8001），由 manager 自动启动。
+
+> **Pi 上的语音客户端（唤醒词 / VAD 录音）已退役**（commit `77265ed`）。当前 voice service 主要被以下两路使用，没有外部音频客户端：
+> - **Discord `/log` 命令** —— 自由文本走 LLM 工具调用写育儿日志
+> - **`tools/test_llm.py`** —— 命令行直接 POST 文本，调试 LLM 工具
+>
+> 如果以后重新接入音频客户端（如 ReSpeaker + openwakeword），再 POST `/voice/process` 即可走完整 STT → LLM → TTS 流程。历史唤醒词模型 `hey_momobot.onnx` 仍在 `wakeword_training/`（gitignored）。
 
 ### 架构
 
 ```
 ┌────────────────────────────────────────────┐
-│        语音端 (Raspberry Pi / Mac with mic)│
+│   服务端 voice_service.py  :8001           │
 ├────────────────────────────────────────────┤
-│  mic -> openwakeword   唤醒词检测           │
-│          (hey_momobot.onnx)                │
-│  VAD 录音 -> 静音 2s 停止                   │
-│                                            │
-│  TTS WAV -> 交给服务端                      │
-└────────────────────┬───────────────────────┘
-                     │  WAV
-                     ▼
-┌────────────────────────────────────────────┐
-│    服务端 (MacBook Air M3 / Win CUDA)      │
-├────────────────────────────────────────────┤
-│  POST /voice/process                       │
-│  1. faster-whisper / mlx-whisper (STT)     │
-│  2. LLM + tool calling                     │
-│     ├─ MiniMax  (默认)                     │
-│     └─ DeepSeek (可切换，含 thinking)      │
-│     └─ baby_log REST API                   │
-│  3. MiniMax / edge-tts (TTS)               │
-│                                            │
-│  POST /voice/test_llm  (跳过 STT/TTS 调试) │
+│  POST /voice/process    WAV → STT → LLM →  │
+│                         tools → TTS → WAV  │
+│  POST /voice/test_llm   text → LLM →       │
+│                         tools → text       │
 │  GET  /health                              │
-└────────────────────┬───────────────────────┘
-                     │  TTS WAV
-                     ▼
-                扬声器播放
+│                                            │
+│  STT:  faster-whisper (CUDA) /             │
+│        mlx-whisper (Apple Silicon)         │
+│  LLM:  MiniMax / DeepSeek (thinking)       │
+│  TTS:  MiniMax (WS 流式) / edge-tts        │
+└────────────────────────────────────────────┘
 ```
-
-流程：唤醒词触发 → 激活提示音 → 录音直到静音 2s → 发送 WAV → STT 转录 → LLM 解析意图并调用工具写日志 → TTS 合成回复 → 播放语音
-
----
-
-### 硬件需求（语音端）
-
-- **麦克风**：ReSpeaker USB Mic Array（推荐）或任意 USB 麦克风
-- **扬声器**：USB/3.5mm 扬声器或耳机
-- **设备**：Raspberry Pi 3B+/4/Zero 2W 或 macOS
 
 ---
 
@@ -684,61 +666,7 @@ pip install faster-whisper
 
 ---
 
-### 语音端安装（Raspberry Pi / macOS）
-
-**Raspberry Pi（Linux）：**
-
-```bash
-sudo apt install portaudio19-dev python3-pyaudio
-pip install -r agent/requirements.txt
-```
-
-**macOS：**
-
-```bash
-brew install portaudio
-pip install -r agent/requirements.txt
-```
-
-语音端的 `config.json` 需设置服务端地址：
-
-```json
-{
-  "voice_service_url": "http://192.168.1.100:8001"
-}
-```
-
----
-
-### 唤醒词模型
-
-默认使用自训练模型 `wakeword_training/models/hey_momobot.onnx`。如需使用 openwakeword 内置模型，修改 [agent/config.py](agent/config.py) 中的 `WAKE_MODEL_PATH`。
-
-首次运行会自动下载 openwakeword 基础模型：
-
-```bash
-python -c "import openwakeword; openwakeword.utils.download_models()"
-```
-
----
-
-### 配置项（语音相关）
-
-#### 语音端 `agent/config.py`（或 `agent/.env`）
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `voice_service_url` | `http://localhost:8001` | 服务端地址（Pi 上填服务器 LAN IP） |
-| `wake_threshold` | `0.85` | 唤醒词得分阈值（提高可减少误触） |
-| `wake_confirm_frames` | `3` | 连续满足阈值的帧数才触发（每帧 80ms） |
-| `wake_peak_threshold` | `0.95` | 确认窗口内的峰值分数要求（过滤噪声脉冲） |
-| `wake_cooldown_s` | `3.0` | 两次激活间的最小冷却时间（秒） |
-| `voice_silence_rms` | `200` | VAD 静音 RMS 阈值（int16） |
-| `voice_silence_s` | `2.0` | 静音持续多少秒停止录音 |
-| `voice_max_record_s` | `15.0` | 单次录音最长时长（秒） |
-| 白噪音保活 | 启用 | 后台低音量白噪音防 BT/USB 喇叭休眠，前台播放时自动暂停（见 `agent/white_noise.py`） |
-
-#### 服务端 `services/voice/config.json`
+### 配置项 `services/voice/config.json`
 
 ##### Whisper STT
 
@@ -805,20 +733,7 @@ python -c "import openwakeword; openwakeword.utils.download_models()"
 .\venv\Scripts\python.exe services\voice\voice_service.py
 ```
 
-访问 `http://localhost:8001/health` 确认服务就绪（首次启动会下载/加载 Whisper 模型，约 10~30s）。
-
-**语音端（Pi / macOS with mic）：**
-
-```bash
-# 列出音频设备
-python agent/voice_agent.py --list-devices
-
-# 使用默认设备（自动选 ReSpeaker）
-python agent/voice_agent.py
-
-# 指定设备序号
-python agent/voice_agent.py --device 2
-```
+访问 `http://localhost:8001/health` 确认服务就绪（首次启动会下载/加载 Whisper 模型，约 10~30s）。manager 默认会拉起 voice service，无需手动启动。
 
 **调试 LLM tool calling（跳过 STT/TTS）：**
 
@@ -879,25 +794,11 @@ LLM 配置了以下工具，说中文或日语均可触发：
 - 首次加载 large-v3 约 10~30s，属正常现象（模型约 3GB）
 - macOS M3 上 mlx-whisper 首次运行需从 HuggingFace 下载模型缓存，之后秒级加载
 
-**误触唤醒词频率高**
-- 提高 `wake_threshold`（默认 0.85，可调到 0.90）
-- 提高 `wake_peak_threshold`（默认 0.95，可调到 0.97~0.99）
-- 提高 `wake_confirm_frames`（默认 3，即需要 240ms 持续触发）
-
 **LLM 返回空或 503**
 - 检查 `services/voice/config.json` 中对应 provider 的 `*_api_key` 是否正确
 - MiniMax `base_url`：国内用 `https://api.minimaxi.com/v1`，国际用 `https://api.minimax.io`
 - 配额耗尽时可切 provider：`"llm_provider": "deepseek"`（或反过来）；TTS 切 `"tts_provider": "edge"` 用免费微软 TTS
 - 用 `tools/test_llm.py "配方奶 90 毫升"` 直接打 LLM，比走 STT 链路更快定位是 LLM 还是 Whisper 的问题
-
-**Pi 连不上 voice_service**
-- 确认语音端 `config.json` 中 `voice_service_url` 填的是服务器 LAN IP，不是 localhost
-- 服务端防火墙放开 `voice_service_port`（默认 8001）
-
-**BT/USB 喇叭播放 TTS 时卡顿 / 第一秒丢失**
-- 蓝牙喇叭长时间静默会进省电模式，再次唤醒需要 0.5~2s
-- 语音端 `agent/white_noise.py` 在后台播放极低音量白噪音保持设备 awake，前台 TTS/beep 时自动暂停
-- 默认开启，如不需要可改 `agent/voice_agent.py` 中的初始化逻辑
 
 ---
 
