@@ -1518,19 +1518,29 @@ els.bannerClose.addEventListener('click', () => {
 
 // ────────────────────────────────────────
 //  设备告警弹窗（多 client 同步：任意一台点关闭 → 服务端广播 alert_dismissed → 全部关）
+//  alert_id 锁定当前显示的那个告警，防止"旧 dismiss 顺序错乱关掉新弹窗"。
 // ────────────────────────────────────────
 const _alertDlgDefaultLabel = T.alertDlgClose;
+let   _currentAlertId        = null;
 
 function showAlertDialog(p) {
   if (!p) return;
-  els.alertDialogMsg.textContent  = p.message || '';
-  els.alertDialogTime.textContent = p.timestamp || '';
-  els.alertDialog.className = 'alert-dialog show';
+  _currentAlertId                  = p.alert_id || null;
+  els.alertDialogMsg.textContent   = p.message || '';
+  els.alertDialogTime.textContent  = p.timestamp || '';
+  els.alertDialog.className        = 'alert-dialog show';
   els.alertDialogClose.disabled    = false;
   els.alertDialogClose.textContent = _alertDlgDefaultLabel;
 }
 
-function hideAlertDialog() {
+function hideAlertDialog(matchId) {
+  // matchId 给定时只关 id 匹配的弹窗（防止旧 dismiss 帧关掉新告警）。
+  // matchId 为 null/undefined（没有 alert_id 字段，老服务端兼容）一律关掉。
+  if (matchId !== undefined && matchId !== null
+      && _currentAlertId !== null && matchId !== _currentAlertId) {
+    return;
+  }
+  _currentAlertId          = null;
   els.alertDialog.className = 'alert-dialog';
 }
 
@@ -1539,7 +1549,11 @@ els.alertDialogClose.addEventListener('click', async () => {
   els.alertDialogClose.disabled    = true;
   els.alertDialogClose.textContent = T.alertDlgSending;
   try {
-    await fetch('/api/alert/dismiss', { method: 'POST' });
+    await fetch('/api/alert/dismiss', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ alert_id: _currentAlertId }),
+    });
     // 不在这里 hide —— 等服务端广播 alert_dismissed 帧来同步关闭（多 client 一致性）
   } catch (_) {
     // 网络异常：本地兜底关掉，免得卡住；服务端那边没 dismiss 也最多挂到 sanity timeout
@@ -1581,7 +1595,7 @@ function connectWs() {
       } else if (msg.type === 'alert_active') {
         showAlertDialog(msg);
       } else if (msg.type === 'alert_dismissed') {
-        hideAlertDialog();
+        hideAlertDialog(msg.alert_id);
       } else if (msg.type === 'baby_stats') {
         updateBabyStats(msg);
         refreshTodayLog();   // 多设备同步：进 DOM diff 路径，不跳

@@ -7,6 +7,7 @@ import asyncio
 import json
 import time
 import urllib.request
+import uuid
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -291,9 +292,12 @@ async def internal_sensor_push(request: Request):
         else:
             log.warning("[AlertPush] notify DISABLED → mode=%s level=%s msg=%s", mode, level, msg)
 
-        # 弹窗 payload：所有 web client 收到后弹同一个 dialog；任意一台点关闭 → 全关
-        payload = {
+        # 每个告警发一个唯一 id，前端 dismiss 时把 id 带回 → 防止"旧 dismiss + 新 alert"
+        # 顺序乱掉时把刚弹出的新弹窗误关。
+        alert_id = uuid.uuid4().hex[:8]
+        payload  = {
             "type":      "alert_active",
+            "alert_id":  alert_id,
             "level":     level,
             "mode":      mode,
             "message":   msg,
@@ -313,14 +317,14 @@ async def internal_sensor_push(request: Request):
         # _ACK_WAIT_TIMEOUT 是 sanity 上限——Pi 端已无超时，正常路径靠用户。
         try:
             await asyncio.wait_for(ev.wait(), timeout=_ACK_WAIT_TIMEOUT)
-            log.info("[AlertPush] mode=%s acknowledged → ack=true", mode)
+            log.info("[AlertPush] id=%s mode=%s acknowledged → ack=true", alert_id, mode)
         except asyncio.TimeoutError:
-            log.warning("[AlertPush] mode=%s wait timeout (%.0fs) → ack=true (sanity fallback)",
-                        mode, _ACK_WAIT_TIMEOUT)
+            log.warning("[AlertPush] id=%s mode=%s wait timeout (%.0fs) → ack=true (sanity fallback)",
+                        alert_id, mode, _ACK_WAIT_TIMEOUT)
             async with _alert_lock:
                 if _alert_data is payload:
                     _alert_data = None
-            await state.broadcast({"type": "alert_dismissed"})
+            await state.broadcast({"type": "alert_dismissed", "alert_id": alert_id})
 
         return JSONResponse({"ok": True, "ack": True})
     else:
@@ -329,17 +333,37 @@ async def internal_sensor_push(request: Request):
 
 
 @app.post("/api/alert/dismiss")
-async def alert_dismiss():
-    """任意一台 web client 点告警弹窗的关闭按钮 → 通知 Pi（让 ack 返回）+ 广播让所有弹窗一起关。"""
+async def alert_dismiss(request: Request):
+    """关闭当前 pending 告警：通知 Pi（让 ack 返回）+ 广播让所有弹窗一起关。
+
+    body 里的 `alert_id`（前端弹窗时记下的）必须匹配当前 pending 告警的 id，
+    否则视为"过期 dismiss"——避免旧 dismiss 误关刚换上的新告警。
+    body 不带 alert_id（兼容老前端）则按当前 pending 告警关闭。
+    """
     global _alert_event, _alert_data
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    target_id = (body or {}).get("alert_id")
+
+    dismissed_id: str | None = None
     async with _alert_lock:
-        ev = _alert_event
-        _alert_data = None
-        if ev is not None and not ev.is_set():
-            ev.set()      # 唤醒还在等的 /api/internal/sensor 协程，让它返回 ack=true
-    # 广播给所有 client（哪怕没有等中的请求也无所谓——前端用这个事件统一关闭弹窗）
-    await state.broadcast({"type": "alert_dismissed"})
-    return JSONResponse({"ok": True})
+        cur_id = (_alert_data or {}).get("alert_id")
+        if target_id is not None and cur_id is not None and target_id != cur_id:
+            # 前端看的还是旧告警，但服务端 pending 的已经是新的 → 拒绝，让 UI 收到新告警再关
+            return JSONResponse(
+                {"ok": False, "error": "stale_alert_id", "current_id": cur_id},
+                status_code=409,
+            )
+        dismissed_id = cur_id  # 可能为 None（没有 pending）
+        _alert_data  = None
+        if _alert_event is not None and not _alert_event.is_set():
+            _alert_event.set()      # 唤醒还在等的 /api/internal/sensor 协程，让它返回 ack=true
+
+    # 广播带上被关掉的那个 id，前端只关 id 匹配的弹窗
+    await state.broadcast({"type": "alert_dismissed", "alert_id": dismissed_id})
+    return JSONResponse({"ok": True, "alert_id": dismissed_id})
 
 
 @app.post("/api/sensor/refresh")

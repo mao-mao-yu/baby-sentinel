@@ -1,15 +1,17 @@
 """
 Voice Service — FastAPI microservice running on the server.
 
-Receives WAV audio from voice_agent (Pi):
-  POST /voice/process  →  STT → LLM tool calling → TTS  →  returns WAV
+Pi 上的语音客户端已退役（commit 77265ed）；当前消费方主要是 Discord /log
+和 tools/test_llm.py，外加未来如果有自定义客户端 POST /voice/process。
 
 Usage:
     python voice/voice_service.py
     uvicorn voice.voice_service:app --host 0.0.0.0 --port 8001 --reload
 """
+import asyncio
 import logging
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -32,86 +34,73 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-app = FastAPI(title="BabySentinel Voice Service", version="1.0")
-
-# Lazy-init singletons (loaded once at first request to avoid blocking startup)
-_stt: STT | None = None
+# 加载好后由 lifespan 填进来。endpoint 内直接用，不再做 lazy fallback。
+_stt: STT | None      = None
 _llm: LLMAgent | None = None
-_tts = None
+_tts                  = None  # TTS provider 接口暂无统一基类
 
 
-def _get_stt() -> STT:
-    global _stt
-    if _stt is None:
-        _stt = STT()
-    return _stt
-
-
-def _get_llm() -> LLMAgent:
-    global _llm
-    if _llm is None:
-        _llm = LLMAgent(get_llm_provider())
-    return _llm
-
-
-def _get_tts():
-    global _tts
-    if _tts is None:
-        _tts = get_tts_provider()
-    return _tts
-
-
-@app.on_event("startup")
-async def _startup():
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    global _stt, _llm, _tts
     log.info(f"[VoiceService] Starting on port {cfg.VOICE_SERVICE_PORT}")
     log.info(f"[VoiceService] Whisper: {cfg.WHISPER_MODEL} / {cfg.WHISPER_DEVICE} / backend={cfg.WHISPER_BACKEND}")
     if cfg.LLM_PROVIDER == "minimax":
-        log.info(f"[VoiceService] LLM: minimax / {cfg.MINIMAX_LLM_MODEL}  @ {cfg.MINIMAX_BASE_URL}  key={'set' if cfg.MINIMAX_API_KEY else 'MISSING'}")
+        log.info(f"[VoiceService] LLM: minimax / {cfg.MINIMAX_LLM_MODEL}  @ {cfg.MINIMAX_BASE_URL}  "
+                 f"key={'set' if cfg.MINIMAX_API_KEY else 'MISSING'}")
     elif cfg.LLM_PROVIDER == "deepseek":
         log.info(f"[VoiceService] LLM: deepseek / {cfg.DEEPSEEK_MODEL}  @ {cfg.DEEPSEEK_BASE_URL}  "
-                 f"reasoning={cfg.DEEPSEEK_REASONING_EFFORT or 'off'}  thinking={cfg.DEEPSEEK_THINKING_ENABLED}  "
+                 f"reasoning={cfg.DEEPSEEK_REASONING_EFFORT or 'off'}  "
+                 f"thinking={cfg.DEEPSEEK_THINKING_ENABLED}  "
                  f"key={'set' if cfg.DEEPSEEK_API_KEY else 'MISSING'}")
     else:
         log.warning(f"[VoiceService] LLM: unknown provider {cfg.LLM_PROVIDER!r}")
     log.info(f"[VoiceService] TTS: {cfg.TTS_PROVIDER} / {cfg.TTS_MODEL}")
     log.info(f"[VoiceService] Baby API: {cfg.BABY_API_URL}")
-    # Load Whisper in thread pool so the event loop stays unblocked during startup
-    import asyncio
-    await asyncio.get_event_loop().run_in_executor(None, _get_stt)
+
+    # Whisper 加载耗 10–30s 且 CPU 密集——丢线程池，event loop 保持响应。
+    # LLM/TTS 是轻量的 client wrapper，主线程同步初始化够快。
+    loop = asyncio.get_event_loop()
+    _stt = await loop.run_in_executor(None, STT)
+    _llm = LLMAgent(get_llm_provider())
+    _tts = get_tts_provider()
+
     log.info("[VoiceService] Ready.")
+    yield
+    # 无清理需求——所有 client 都是 stateless 或自带 connection pool
+
+
+app = FastAPI(title="BabySentinel Voice Service", version="1.0", lifespan=_lifespan)
 
 
 @app.post("/voice/process", response_class=Response)
 async def process_voice(audio: UploadFile = File(...)) -> Response:
-    """
-    Main endpoint called by voice_agent.py on the Pi.
-    Accepts multipart WAV, returns WAV TTS audio.
-    """
+    """STT → LLM tool calling → TTS。Multipart WAV in，TTS WAV out。"""
     wav_bytes = await audio.read()
     if len(wav_bytes) < 1000:
         raise HTTPException(400, "Audio too short")
 
     # 1. Speech-to-Text
-    text, lang = await _get_stt().transcribe(wav_bytes)
+    text, lang = await _stt.transcribe(wav_bytes)
     if not text:
         log.info("[VoiceService] No speech detected, ignoring")
-        return Response(status_code=204)   # agent will stay silent (no error beep)
+        return Response(status_code=204)   # caller stays silent (no error beep)
 
     # 2. LLM + tool calling
     try:
-        reply, needs_followup = await _get_llm().process(text, lang)
+        reply, needs_followup = await _llm.process(text, lang)
     except Exception as exc:
         log.error(f"[VoiceService] LLM error: {type(exc).__name__}: {exc}", exc_info=True)
         return Response(status_code=503)
 
-    # LLM 返回空文本时跳过 TTS（agent 静默，与"无语音"分支一致）
+    # LLM 返回空文本时跳过 TTS（与"无语音"分支一致：caller 端静默）
     if not reply or not reply.strip():
         log.info("[VoiceService] LLM returned empty reply, skipping TTS")
         return Response(status_code=204)
 
     # 3. Text-to-Speech
     try:
-        tts_wav = await _get_tts().synthesize(reply, lang)
+        tts_wav = await _tts.synthesize(reply, lang)
     except Exception as exc:
         log.error(f"[VoiceService] TTS error: {type(exc).__name__}: {exc}", exc_info=True)
         return Response(status_code=503)
@@ -140,7 +129,7 @@ async def test_llm(payload: dict) -> dict:
     log.info(f"[test_llm] in: text={text!r}  lang={lang}")
     t0 = time.time()
     try:
-        reply, needs_followup = await _get_llm().process(text, lang)
+        reply, needs_followup = await _llm.process(text, lang)
     except Exception as exc:
         elapsed = time.time() - t0
         log.error(f"[test_llm] LLM error after {elapsed:.2f}s: {type(exc).__name__}: {exc}",
