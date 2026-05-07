@@ -34,7 +34,8 @@ from shared.config import ROOT_CFG
 # BLE 字段由远端 sense-u-ble (Pi) 服务通过 /api/internal/sensor 推送过来
 _BLE_FIELDS = frozenset((
     "breath_rate", "temperature", "posture",
-    "battery", "ble_ok", "last_update",
+    "battery", "wearing", "charge", "activity",
+    "ble_ok", "last_update",
 ))
 
 _FEED_REPEAT        = FEED_REPEAT_S
@@ -43,6 +44,16 @@ _BLE_HEALTH_TIMEOUT = BLE_HEALTH_TIMEOUT_S
 _reminder_feed_ts:   float = 0   # 正在追踪的那次喂奶的 ts
 _last_reminder_time: float = 0   # 上次发出提醒的时刻
 _last_ble_push_at:   float = 0   # 最近一次 ble_service.py 推送时刻（心跳）
+
+# 当前未关闭的告警弹窗（所有 web client 共享一份；用户在任意一台点关闭 → 全部关）
+# - _alert_event 在用户点关闭或被新告警顶替时被 set，让正在等响应的 Pi 请求继续返回
+# - _alert_data 缓存 payload，新连入的 WS client 在握手帧里能拿到当前告警
+# - Pi 已删掉 HTTP 2s timeout（用户改的），所以这里默认无限等。_ACK_WAIT_TIMEOUT 只是
+#   一个 sanity 上限：万一前端关闭逻辑出 bug 卡住，至少 1 小时后强制放过让设备 LED 能停。
+_alert_lock:           asyncio.Lock        = asyncio.Lock()
+_alert_event:  asyncio.Event | None = None
+_alert_data:           dict | None = None
+_ACK_WAIT_TIMEOUT: float = 3600.0   # 1h sanity fallback，正常路径靠用户点关闭
 
 
 async def _ble_health_loop():
@@ -162,15 +173,17 @@ _CFG_VER = str(int(time.time()))
 async def ws_handler(websocket: WebSocket):
     await websocket.accept()
     active_ws.add(websocket)
-    await websocket.send_text(json.dumps(
-        {
-            "type":        "state",
-            "sensor":      sensor_state,
-            "baby_stats":  baby_log.get_stats(),
-            "birth_date":  BABY.get("birth_date", ""),
-        },
-        ensure_ascii=False,
-    ))
+    # 握手帧：当前传感器快照 + 育儿统计；如果有未关闭的告警弹窗也一并带上，
+    # 让刚连入的 client 也能立即弹出（多设备同步）。
+    handshake = {
+        "type":        "state",
+        "sensor":      sensor_state,
+        "baby_stats":  baby_log.get_stats(),
+        "birth_date":  BABY.get("birth_date", ""),
+    }
+    if _alert_data is not None:
+        handshake["alert_active"] = _alert_data
+    await websocket.send_text(json.dumps(handshake, ensure_ascii=False))
     try:
         while True:
             await websocket.receive_text()
@@ -253,9 +266,81 @@ async def internal_sensor_push(request: Request):
         for k, v in data.items():
             if k in _BLE_FIELDS:
                 sensor_state[k] = v
+        # 打印到 server 进程的 stdout，方便在 manager UI 的日志面板里直观看到 Pi 推过来的值。
+        # sense-u-ble 不管 BLE 连没连上都会按 ble_poll_interval_s 持续推送（心跳式），
+        # 全 null 的纯心跳没价值——降到 DEBUG，只有任一字段有值时才打 INFO 避免 log spam。
+        _has_data = any(data.get(k) is not None for k in
+                        ("breath_rate", "temperature", "posture", "battery",
+                         "wearing", "charge", "activity"))
+        (log.info if _has_data else log.debug)(
+            "[SensorPush] breath=%s temp=%s posture=%s batt=%s wearing=%s charge=%s activity=%s ble_ok=%s",
+            data.get("breath_rate"), data.get("temperature"),
+            data.get("posture"),     data.get("battery"),
+            data.get("wearing"),     data.get("charge"),
+            data.get("activity"),    data.get("ble_ok"),
+        )
         await state.broadcast({"type": "sensor", **sensor_state})
+    elif data.get("type") == "alert":
+        # Pi 端 sense-u-ble 不接通知渠道，由本服务端统一收口
+        global _alert_event, _alert_data
+        msg   = data.get("message", "")
+        level = data.get("level", "warning")
+        mode  = data.get("mode")          # 设备原始 alertMode（int），sense-u-ble v2 起带这个字段
+        ts    = data.get("timestamp")
+        if ROOT_CFG.get("alert_notify_enabled", True):
+            log.info("[AlertPush] dispatch mode=%s level=%s msg=%s", mode, level, msg)
+            await trigger_alert(msg, level)
+        else:
+            log.warning("[AlertPush] notify DISABLED → mode=%s level=%s msg=%s", mode, level, msg)
+
+        # 弹窗 payload：所有 web client 收到后弹同一个 dialog；任意一台点关闭 → 全关
+        payload = {
+            "type":      "alert_active",
+            "level":     level,
+            "mode":      mode,
+            "message":   msg,
+            "timestamp": ts,
+        }
+        async with _alert_lock:
+            # 已有 pending alert 还没被 dismiss → 把旧的"顶替"掉（旧的 HTTP 请求会立即返回 ack=true）
+            if _alert_event is not None and not _alert_event.is_set():
+                _alert_event.set()
+            ev = asyncio.Event()
+            _alert_event = ev
+            _alert_data  = payload
+
+        await state.broadcast(payload)
+
+        # 等用户在任意一台 web 上点关闭按钮（POST /api/alert/dismiss）。
+        # _ACK_WAIT_TIMEOUT 是 sanity 上限——Pi 端已无超时，正常路径靠用户。
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=_ACK_WAIT_TIMEOUT)
+            log.info("[AlertPush] mode=%s acknowledged → ack=true", mode)
+        except asyncio.TimeoutError:
+            log.warning("[AlertPush] mode=%s wait timeout (%.0fs) → ack=true (sanity fallback)",
+                        mode, _ACK_WAIT_TIMEOUT)
+            async with _alert_lock:
+                if _alert_data is payload:
+                    _alert_data = None
+            await state.broadcast({"type": "alert_dismissed"})
+
+        return JSONResponse({"ok": True, "ack": True})
     else:
         await state.broadcast(data)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/alert/dismiss")
+async def alert_dismiss():
+    """任意一台 web client 点告警弹窗的关闭按钮 → 通知 Pi（让 ack 返回）+ 广播让所有弹窗一起关。"""
+    global _alert_event, _alert_data
+    async with _alert_lock:
+        ev = _alert_event
+        _alert_data = None
+        if ev is not None and not ev.is_set():
+            ev.set()      # 唤醒还在等的 /api/internal/sensor 协程，让它返回 ack=true
+    # 广播给所有 client（哪怕没有等中的请求也无所谓——前端用这个事件统一关闭弹窗）
+    await state.broadcast({"type": "alert_dismissed"})
     return JSONResponse({"ok": True})
 
 

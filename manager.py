@@ -11,6 +11,7 @@
 
 import asyncio
 import atexit
+import json
 import os
 import subprocess
 import sys
@@ -20,7 +21,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -154,6 +155,7 @@ SERVICES: dict[str, dict] = {
         # adoptable: manager 退出时**不要** ssh 给 Pi 发 systemctl stop，让 Pi 上的
         # BLE 服务保持运行；下次 manager 启动会走 adopt 路径只起 tail。
         "adoptable":  True,
+        "pairable":   True,    # UI 渲染"配对"按钮 → POST /api/manager/ble/pair
         "port":       None,
     },
     "server": {
@@ -677,6 +679,7 @@ async def get_status():
             # UI 用这两个 flag 决定是否渲染"检查更新/更新"按钮
             "remote":   bool(SERVICES[svc].get("remote")),
             "git":      bool((SERVICES[svc].get("remote") or {}).get("git_path")),
+            "pairable": bool(SERVICES[svc].get("pairable")),
         }
         for svc in SERVICES
     })
@@ -703,6 +706,63 @@ async def restart_svc(svc: str):
     if svc not in SERVICES:
         return JSONResponse({"ok": False, "error": "unknown service"}, status_code=404)
     asyncio.create_task(_do_start(svc))
+    return JSONResponse({"ok": True})
+
+
+# ── 配置编辑（manager UI 写回 config.json）──────────────────────────
+
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+
+
+def _set_dotted(obj: dict, path: str, value) -> None:
+    """把 value 写入 obj[a][b][c]…，缺失的中间节点自动建为 dict。"""
+    parts = path.split(".")
+    cur = obj
+    for p in parts[:-1]:
+        if not isinstance(cur.get(p), dict):
+            cur[p] = {}
+        cur = cur[p]
+    cur[parts[-1]] = value
+
+
+@app.get("/api/manager/config")
+async def get_config():
+    """返回当前 config.json 的最新磁盘内容（绕过 ROOT_CFG cache）。"""
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            return JSONResponse({"ok": True, "config": json.load(f)})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"read fail: {e}"}, status_code=500)
+
+
+@app.post("/api/manager/config")
+async def post_config(request: Request):
+    """把 patch 合并写回 config.json（dotted-path 平铺，atomic .tmp + rename）。"""
+    body = await request.json()
+    patch = body.get("patch")
+    if not isinstance(patch, dict):
+        return JSONResponse({"ok": False, "error": "patch must be object"}, status_code=400)
+
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"read fail: {e}"}, status_code=500)
+
+    for k, v in patch.items():
+        _set_dotted(cfg, str(k), v)
+
+    tmp = CONFIG_PATH + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, CONFIG_PATH)
+    except Exception as e:
+        try: os.unlink(tmp)
+        except Exception: pass
+        return JSONResponse({"ok": False, "error": f"write fail: {e}"}, status_code=500)
+
     return JSONResponse({"ok": True})
 
 
@@ -778,6 +838,84 @@ async def do_update(svc: str):
     asyncio.create_task(_do_start(svc))   # _do_start 会先 stop 再 start
     return JSONResponse({"ok": True})
 
+
+# ── BLE 配对（一次性获取 baby_code）─────────────────────────────────
+#
+# sense-u-ble 的 tools/pairing.py 是交互式工具：input() 等回车 + Phase 2 永远跑。
+# 这里通过 SSH 让 Pi 跑该工具的非交互版本：
+#   1. 停 sense-u-ble.service 释放 BLE 适配器
+#   2. 删旧 baby_code.json（强制走 Phase 1）
+#   3. echo '' | timeout 45 python tools/pairing.py
+#      ↑ 喂空行让 input() 立即返回；timeout 在 Phase 2 起来后强杀
+#   4. 检查 stdout 是否含 "baby_code 已保存"
+#   5. 重启 service（无论成功失败）；失败时还原备份的 baby_code.bak.json
+
+@app.post("/api/manager/ble/pair")
+async def ble_pair():
+    svc = "ble"
+    defn = SERVICES.get(svc) or {}
+    if not defn.get("pairable"):
+        return JSONResponse({"ok": False, "error": "service not pairable"}, status_code=400)
+    r = defn.get("remote") or {}
+    if not r.get("host"):
+        return JSONResponse({"ok": False, "error": "pi_host not configured"}, status_code=400)
+    git_path = r.get("git_path")
+    unit     = r.get("unit")
+    if not git_path or not unit:
+        return JSONResponse({"ok": False, "error": "remote missing git_path/unit"}, status_code=400)
+
+    _append_log(svc, f"{'─'*40}")
+    _append_log(svc, "[配对] 开始 — 请确认设备已长按两下进入配对模式（蓝灯慢闪）")
+
+    # 1) 停 service
+    _append_log(svc, "[配对] 停 sense-u-ble.service ...")
+    code, out = await _ssh_run(r, f"systemctl --user stop {unit}", timeout=10)
+    if code != 0:
+        _append_log(svc, f"[配对] 停服务失败: {out.strip()[:200]}")
+        return JSONResponse({"ok": False, "step": "stop_service", "log": out[-500:]}, status_code=500)
+
+    # 2) 备份 + 删除旧 baby_code.json
+    backup_cmd = (
+        f"cd {git_path} && "
+        f"if [ -f baby_code.json ]; then cp baby_code.json baby_code.bak.json; fi && "
+        f"rm -f baby_code.json"
+    )
+    await _ssh_run(r, backup_cmd, timeout=5)
+
+    # 3) 跑 pairing.py（非交互）
+    _append_log(svc, "[配对] 运行 tools/pairing.py（45s 超时）...")
+    pair_cmd = (
+        f"cd {git_path} && "
+        f"echo '' | timeout 45 venv/bin/python tools/pairing.py 2>&1 | tail -200; "
+        f"if [ -f baby_code.json ]; then echo '__PAIR_OK__'; else echo '__PAIR_FAIL__'; fi"
+    )
+    code, out = await _ssh_run(r, pair_cmd, timeout=70)
+
+    success = "__PAIR_OK__" in out and "baby_code 已保存" in out
+    # 截短日志放到 UI（最后 ~60 行通常够定位问题）
+    log_tail = "\n".join(out.strip().splitlines()[-60:])
+
+    # 4) 失败时还原备份
+    if not success:
+        _append_log(svc, "[配对] ✗ 失败，还原旧 baby_code.json")
+        await _ssh_run(
+            r,
+            f"cd {git_path} && [ -f baby_code.bak.json ] && cp baby_code.bak.json baby_code.json || true",
+            timeout=5,
+        )
+
+    # 5) 重启 service（成功失败都要恢复 BLE 服务）
+    asyncio.create_task(_do_start(svc))
+
+    if success:
+        _append_log(svc, "[配对] ✓ 配对成功 → 重启 service")
+        return JSONResponse({"ok": True, "log": log_tail})
+    else:
+        _append_log(svc, f"[配对] ✗ 失败 (code={code})")
+        return JSONResponse(
+            {"ok": False, "step": "pair", "log": log_tail},
+            status_code=500,
+        )
 
 
 # ── 入口 ─────────────────────────────────────────────────────────────

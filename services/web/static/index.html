@@ -428,6 +428,50 @@ video {
 }
 .banner-close:hover { opacity: 1; }
 
+/* ── 设备告警弹窗（device alert dialog；多 client 同步：任一关闭则全部关闭）── */
+.alert-dialog {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0, 0, 0, .72);
+  display: none; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.alert-dialog.show { display: flex; }
+.alert-dialog-panel {
+  background: var(--card);
+  border: 2px solid var(--red);
+  border-radius: 14px;
+  padding: 22px 22px 18px;
+  width: min(420px, 100%);
+  text-align: center;
+  box-shadow: 0 0 32px rgba(248, 81, 73, .45);
+  animation: alertGlow 1.4s ease infinite alternate;
+}
+@keyframes alertGlow {
+  from { box-shadow: 0 0 24px rgba(248, 81, 73, .35); }
+  to   { box-shadow: 0 0 56px rgba(248, 81, 73, .85); }
+}
+.alert-dialog-head {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin-bottom: 14px;
+  font-size: 1rem; font-weight: 700; color: var(--red);
+}
+.alert-dialog-msg {
+  font-size: 1.08rem; color: var(--text); line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.alert-dialog-time {
+  font-size: 0.78rem; color: var(--muted); margin-top: 8px;
+}
+.alert-dialog-close {
+  margin-top: 18px;
+  background: var(--red); color: white;
+  border: none; border-radius: 8px;
+  padding: 10px 28px; font-size: 0.95rem; font-weight: 600;
+  cursor: pointer; min-width: 130px;
+}
+.alert-dialog-close:hover:not(:disabled) { background: #dc2626; }
+.alert-dialog-close:disabled { opacity: .55; cursor: default; }
+
 /* ── Baby Log Section ── */
 .baby-log-section {
   flex: 1;
@@ -947,11 +991,13 @@ video {
         <div class="status-row">
           <div class="status-pill" id="card-status">
             <span id="val-status">--</span>
+            <span id="val-wearing" class="status-pill-sub" style="display:none"></span>
             <span id="sub-status" class="status-pill-sub">Sense-U</span>
           </div>
           <div class="status-pill" id="card-battery">
             <span id="batt-icon">🔋</span>
             <span id="val-battery">--</span><span id="sub-battery" style="font-size:0.7em;color:var(--muted)">%</span>
+            <span id="charge-icon" style="display:none;margin-left:2px">⚡</span>
           </div>
           <div class="status-pill" id="pill-update">
             <div class="dot"></div>
@@ -1100,6 +1146,18 @@ video {
     <button class="banner-close" id="banner-close">✕</button>
   </div>
 
+  <!-- 设备告警弹窗（用户点关闭 → POST /api/alert/dismiss → Pi 收到 ack=true 停 LED） -->
+  <div class="alert-dialog" id="alert-dialog">
+    <div class="alert-dialog-panel">
+      <div class="alert-dialog-head">
+        <span data-i18n="alertDlgTitle">🚨 设备告警</span>
+      </div>
+      <div class="alert-dialog-msg" id="alert-dialog-msg">--</div>
+      <div class="alert-dialog-time" id="alert-dialog-time"></div>
+      <button class="alert-dialog-close" id="alert-dialog-close" data-i18n="alertDlgClose">关闭</button>
+    </div>
+  </div>
+
 </div><!-- /layout -->
 
 <!-- 常数配置（LANGS / SENSOR_CFG / POSTURE_ICONS 等） -->
@@ -1154,13 +1212,15 @@ const els = {
   temp:    $('val-temp'),
   cardTemp:$('card-temp'),
 
-  battery:  $('val-battery'),
-  subBatt:  $('sub-battery'),
-  battIcon: $('batt-icon'),
-  cardBatt: $('card-battery'),
+  battery:    $('val-battery'),
+  subBatt:    $('sub-battery'),
+  battIcon:   $('batt-icon'),
+  chargeIcon: $('charge-icon'),
+  cardBatt:   $('card-battery'),
 
-  status:  $('val-status'),
-  subStat: $('sub-status'),
+  status:    $('val-status'),
+  subStat:   $('sub-status'),
+  valWearing:$('val-wearing'),
 
   posture:        $('val-posture'),
   postureImg:     $('posture-img'),
@@ -1174,6 +1234,10 @@ const els = {
   alertBanner: $('alert-banner'),
   bannerText:  $('banner-text'),
   bannerClose: $('banner-close'),
+  alertDialog:      $('alert-dialog'),
+  alertDialogMsg:   $('alert-dialog-msg'),
+  alertDialogTime:  $('alert-dialog-time'),
+  alertDialogClose: $('alert-dialog-close'),
   muteBtn:     $('mute-btn'),
 };
 
@@ -1322,6 +1386,15 @@ function renderSensor(s) {
   els.status.textContent = bleOk ? T.connOn : T.connOff;
   els.status.style.color = bleOk ? 'var(--green)' : 'var(--red)';
 
+  // Wearing —— BLE 已连且字段已知时，跟在连接状态后面显示 (已佩戴)/(未佩戴)
+  if (bleOk && s.wearing != null) {
+    els.valWearing.textContent  = s.wearing ? `(${T.worn})` : `(${T.notWorn})`;
+    els.valWearing.style.color  = s.wearing ? 'var(--green)' : 'var(--yellow)';
+    els.valWearing.style.display = '';
+  } else {
+    els.valWearing.style.display = 'none';
+  }
+
   // Camera status
   camShouldBeLive = s.cam_ok === true;
   if (s.cam_ok && !webrtcActive) startWebRTC();
@@ -1336,6 +1409,12 @@ function renderSensor(s) {
     els.breath.style.color = ok ? 'var(--text)' : 'var(--red)';
     els.cardBreath.className = 'card sensor-card' + (ok ? '' : ' alert-card');
     els.subBreath.textContent = ok ? T.normal : (r < bMin ? T.slow : T.fast);
+  } else {
+    // BLE 断连后 backend 已把字段清成 null —— 重置 UI 避免显示旧值误导
+    els.breath.textContent  = '--';
+    els.breath.style.color  = 'var(--muted)';
+    els.cardBreath.className = 'card sensor-card';
+    els.subBreath.textContent = T.waiting;
   }
 
   // Temperature
@@ -1346,6 +1425,10 @@ function renderSensor(s) {
     const ok = t >= tMin && t <= tMax;
     els.temp.style.color = ok ? 'var(--text)' : (t > tMax ? 'var(--red)' : 'var(--blue)');
     els.cardTemp.className = 'card sensor-card' + (ok ? '' : ' warn-card');
+  } else {
+    els.temp.textContent  = '--';
+    els.temp.style.color  = 'var(--muted)';
+    els.cardTemp.className = 'card sensor-card';
   }
 
   // Battery
@@ -1356,6 +1439,20 @@ function renderSensor(s) {
     els.battIcon.textContent = b >= ok ? '🔋' : b >= low ? '🪫' : '⚠️';
     els.battery.style.color = b < low ? 'var(--red)' : b < warn ? 'var(--yellow)' : 'var(--text)';
     els.cardBatt.className = 'status-pill' + (b < low ? ' err' : b < warn ? ' warn' : '');
+  } else {
+    els.battery.textContent  = '--';
+    els.battIcon.textContent = '🔋';
+    els.battery.style.color  = 'var(--muted)';
+    els.cardBatt.className   = 'status-pill';
+  }
+
+  // Charge —— 1=充电中, 2=已充满；都视为"在充电器上"，显示 ⚡ 图标
+  if (s.charge === 1 || s.charge === 2) {
+    els.chargeIcon.textContent  = s.charge === 2 ? '🔌' : '⚡';
+    els.chargeIcon.title         = s.charge === 2 ? (T.battFull || 'Full') : (T.charging || 'Charging');
+    els.chargeIcon.style.display = '';
+  } else {
+    els.chargeIcon.style.display = 'none';
   }
 
   // Posture
@@ -1370,12 +1467,22 @@ function renderSensor(s) {
     els.postureLoading.style.display = 'none';
     els.cardPosture.className = 'card sensor-card' + (prone ? ' alert-card' : '');
     els.posture.style.color = prone ? 'var(--red)' : 'var(--text)';
+  } else {
+    els.posture.style.visibility   = 'hidden';
+    els.postureImg.style.display   = 'none';
+    els.postureImg.removeAttribute('src');   // 防止刷新后旧图缓存继续展示
+    els.postureLoading.style.display = '';
+    els.postureLoading.textContent   = T.postureLoading;
+    els.cardPosture.className        = 'card sensor-card';
   }
 
-  // Last update
+  // Last update —— 字段为空（断连）→ pill 灰掉、文案回到"等待数据"
   if (s.last_update) {
     els.pillUpdate.className = 'status-pill ok';
     els.txtUpdate.textContent = `${T.updated} ${s.last_update}`;
+  } else {
+    els.pillUpdate.className = 'status-pill';
+    els.txtUpdate.textContent = T.waiting;
   }
 }
 
@@ -1410,6 +1517,37 @@ els.bannerClose.addEventListener('click', () => {
 });
 
 // ────────────────────────────────────────
+//  设备告警弹窗（多 client 同步：任意一台点关闭 → 服务端广播 alert_dismissed → 全部关）
+// ────────────────────────────────────────
+const _alertDlgDefaultLabel = T.alertDlgClose;
+
+function showAlertDialog(p) {
+  if (!p) return;
+  els.alertDialogMsg.textContent  = p.message || '';
+  els.alertDialogTime.textContent = p.timestamp || '';
+  els.alertDialog.className = 'alert-dialog show';
+  els.alertDialogClose.disabled    = false;
+  els.alertDialogClose.textContent = _alertDlgDefaultLabel;
+}
+
+function hideAlertDialog() {
+  els.alertDialog.className = 'alert-dialog';
+}
+
+els.alertDialogClose.addEventListener('click', async () => {
+  // 防止用户连点重复 POST；让按钮显示"发送中"反馈点击有响应
+  els.alertDialogClose.disabled    = true;
+  els.alertDialogClose.textContent = T.alertDlgSending;
+  try {
+    await fetch('/api/alert/dismiss', { method: 'POST' });
+    // 不在这里 hide —— 等服务端广播 alert_dismissed 帧来同步关闭（多 client 一致性）
+  } catch (_) {
+    // 网络异常：本地兜底关掉，免得卡住；服务端那边没 dismiss 也最多挂到 sanity timeout
+    hideAlertDialog();
+  }
+});
+
+// ────────────────────────────────────────
 //  WebSocket
 // ────────────────────────────────────────
 let ws = null;
@@ -1432,11 +1570,18 @@ function connectWs() {
         (msg.alerts || []).forEach(a => addAlert(a));
         if (msg.baby_stats) updateBabyStats(msg.baby_stats);
         if (msg.birth_date) setBirthDate(msg.birth_date);
+        // 服务端握手帧：如果当前有 pending 告警弹窗，新连入的 client 也要立即弹出
+        if (msg.alert_active) showAlertDialog(msg.alert_active);
+        else                  hideAlertDialog();
         refreshTodayLog();
       } else if (msg.type === 'sensor') {
         renderSensor(msg);
       } else if (msg.type === 'alert') {
         addAlert(msg);
+      } else if (msg.type === 'alert_active') {
+        showAlertDialog(msg);
+      } else if (msg.type === 'alert_dismissed') {
+        hideAlertDialog();
       } else if (msg.type === 'baby_stats') {
         updateBabyStats(msg);
         refreshTodayLog();   // 多设备同步：进 DOM diff 路径，不跳

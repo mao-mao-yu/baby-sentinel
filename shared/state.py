@@ -9,6 +9,9 @@ sensor_state: dict = {
     "temperature": None,
     "posture":     None,
     "battery":     None,
+    "wearing":     None,   # bool：True=已佩戴 / False=未佩戴 / None=未知
+    "charge":      None,   # 0=未充电 / 1=充电中 / 2=已充满
+    "activity":    None,   # 0–255 活动量（暂未在前端展示）
     "ble_ok":      False,
     "cam_ok":      False,
     "last_update": None,
@@ -19,7 +22,10 @@ alert_log: list                                 = []
 rtsp_proc: Optional[asyncio.subprocess.Process] = None
 
 # BLE 失联时需要清空的字段（保留 ble_ok / cam_ok 由调用方单独管理）
-_BLE_DATA_FIELDS = ("breath_rate", "temperature", "posture", "battery", "last_update")
+_BLE_DATA_FIELDS = (
+    "breath_rate", "temperature", "posture", "battery",
+    "wearing", "charge", "activity", "last_update",
+)
 
 
 def clear_ble_data() -> None:

@@ -27,5 +27,6 @@
   "discord_channel_ids": [],
   "discord_user_ids": [],
   "bark_server_url": "https://api.day.app",
-  "bark_keys": []
+  "bark_keys": [],
+  "alert_notify_enabled": true
 }
