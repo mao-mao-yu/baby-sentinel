@@ -27,12 +27,11 @@ manager.py (9091)                      ← 服务管理界面 / 子进程编排�
 ├── services/web/server.py (8080)      ← Web UI / baby_log REST / WebSocket 广播 / Discord Bot
 └── services/recorder/service.py       ← 连续录像（ffmpeg）+ 传感器时序存档
 
-services/voice/voice_service.py (8001) ← 语音服务（独立启动）
-│    STT: faster-whisper（CUDA）/ mlx-whisper（Apple Silicon）
-│    LLM: MiniMax / DeepSeek（OpenAI 兼容，可切；tool calling → baby_log API）
-│    TTS: MiniMax WebSocket 流式 / edge-tts 备用
-└── agent/voice_agent.py               ← 运行于 Pi / Mac with mic（独立设备）
-     唤醒词(openwakeword) → VAD录音 → POST WAV → 播放回复
+services/voice/voice_service.py (8001) ← 语音服务（独立启动，HTTP 接口）
+     STT: faster-whisper（CUDA）/ mlx-whisper（Apple Silicon）
+     LLM: MiniMax / DeepSeek（OpenAI 兼容，可切；tool calling → baby_log API）
+     TTS: MiniMax WebSocket 流式 / edge-tts 备用
+     端点：POST /voice/process  body=WAV → response=WAV（自带客户端：手机/Pi/桌面均可）
 ```
 
 各服务配置**分而治之**：

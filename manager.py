@@ -31,14 +31,6 @@ from shared.config import ROOT_CFG, BASE_DIR
 MANAGER_PORT = ROOT_CFG.get("manager_port", 9091)
 _GO2RTC_EXE  = "go2rtc.exe" if sys.platform == "win32" else "go2rtc"
 
-# Pi remote agent config (optional — leave empty to skip Pi托管)
-_PI_HOST = ROOT_CFG.get("pi_host", "")
-_PI_USER = ROOT_CFG.get("pi_ssh_user", "pi")
-_PI_KEY  = os.path.expanduser(ROOT_CFG.get("pi_ssh_key", "~/.ssh/pi_key"))
-
-import shutil as _shutil
-_SSH_BIN = _shutil.which("ssh") or "ssh"
-
 # 子进程组隔离：Unix 用 setsid（new session），Windows 用 CREATE_NEW_PROCESS_GROUP，
 # 让 _kill_tree 能干净地把整棵子进程树带走，且 manager 收到 Ctrl+C 不会直接传给子进程
 _PROC_GROUP_KW: dict = (
@@ -132,28 +124,12 @@ SERVICES: dict[str, dict] = {
     "voice": {
         "name":       "Voice Service",
         "icon":       "🎙",
-        "desc":       f"Whisper STT · MiniMax LLM · TTS   :{ROOT_CFG.get('voice_service_port', 8001)}",
+        "desc":       f"Whisper STT · LLM · TTS   :{ROOT_CFG.get('voice_service_port', 8001)}",
         "cmd":        [sys.executable, "-u", "services/voice/voice_service.py"],
         "port":       ROOT_CFG.get("voice_service_port", 8001),
         # adoptable: manager 重启时不杀 → 避免 Whisper 模型重新加载（large-v3 加载耗时 30s+）
         "adoptable":  True,
         "script":     "services/voice/voice_service.py",
-    },
-    "voice_agent": {
-        "name":       "Voice Agent (Pi)",
-        "icon":       "🎤",
-        "desc":       f"唤醒词 · 录音 · TTS播放   Pi: {_PI_HOST or '(未配置 pi_host)'}",
-        # SSH into Pi if pi_host is set; otherwise fall back to local run
-        "cmd":        (
-            [_SSH_BIN, "-t", "-i", _PI_KEY,
-             "-o", "StrictHostKeyChecking=no",
-             "-o", "BatchMode=yes",
-             f"{_PI_USER}@{_PI_HOST}",
-             "cd ~/BabySentinel && ./venv/bin/python -u agent/voice_agent.py"]
-            if _PI_HOST else
-            [sys.executable, "-u", "agent/voice_agent.py"]
-        ),
-        "port":       None,
     },
 }
 

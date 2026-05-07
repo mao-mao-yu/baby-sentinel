@@ -168,15 +168,6 @@ if ($Voice) {
     Write-Warn "For GPU (CUDA) Whisper inference, install CUDA-enabled PyTorch first:"
     Write-Warn "  https://pytorch.org/get-started/locally/"
     Write-Warn "Then re-run: pip install faster-whisper"
-    # Generate beep sounds if not present
-    $beepFile = "agent\sounds\beep_activate.wav"
-    if (-not (Test-Path $beepFile)) {
-        Write-Warn "Generating beep sounds …"
-        & ".\venv\Scripts\python.exe" agent\generate_sounds.py
-        Write-Ok "Beep sounds generated"
-    } else {
-        Write-Ok "Beep sounds already exist"
-    }
 } else {
     Write-Ok "Skipped (run with -Voice to install: .\setup.ps1 -Voice)"
 }
@@ -199,9 +190,9 @@ Write-Host "    .\venv\Scripts\python.exe manager.py                          # 
 Write-Host "    .\venv\Scripts\python.exe services\web\server.py              # Main server http://localhost:8080" -ForegroundColor DarkGray
 Write-Host "    .\venv\Scripts\python.exe services\voice\voice_service.py     # Voice Service http://localhost:8001  (if -Voice was used)" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "  Voice assistant (after setting up voice deps):" -ForegroundColor White
+Write-Host "  Voice service (HTTP, BYO client):" -ForegroundColor White
 Write-Host "    1. Run .\setup.ps1 -Voice               to install Whisper/TTS deps" -ForegroundColor DarkGray
 Write-Host "    2. Edit services\voice\config.json      set llm_provider, minimax_api_key or deepseek_api_key, etc." -ForegroundColor DarkGray
 Write-Host "    3. Start services\voice\voice_service.py  server side (this machine)" -ForegroundColor DarkGray
-Write-Host "    4. Start agent\voice_agent.py           on Raspberry Pi / macOS with mic" -ForegroundColor DarkGray
+Write-Host "    4. POST a WAV to /voice/process           from any client (Pi / phone / etc.)" -ForegroundColor DarkGray
 Write-Host ""

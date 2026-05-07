@@ -172,28 +172,6 @@ if [[ "$VOICE" -eq 1 ]]; then
         yellow "如需 GPU (CUDA) 推理，请先安装 CUDA PyTorch:"
         yellow "  https://pytorch.org/get-started/locally/"
     fi
-    # PortAudio for voice agent (mic capture on macOS)
-    if [[ "$(uname)" == "Darwin" ]]; then
-        if command -v brew &>/dev/null; then
-            if ! brew list portaudio &>/dev/null 2>&1; then
-                yellow "安装 PortAudio（PyAudio 依赖）…"
-                brew install portaudio
-                green "PortAudio 已安装"
-            else
-                green "PortAudio 已存在"
-            fi
-        else
-            yellow "未找到 Homebrew，如需在本机运行 voice_agent，请手动: brew install portaudio"
-        fi
-    fi
-    # Generate beep sounds if not present
-    if [[ ! -f "agent/sounds/beep_activate.wav" ]]; then
-        yellow "生成提示音 …"
-        $PY agent/generate_sounds.py
-        green "提示音已生成"
-    else
-        green "提示音已存在"
-    fi
 else
     green "跳过（如需安装，重新运行: bash setup.sh --voice）"
 fi
@@ -216,9 +194,9 @@ echo "    ./venv/bin/python manager.py                       # 管理界面 http
 echo "    ./venv/bin/python services/web/server.py                    # 仅主服务 http://localhost:8080"
 echo "    ./venv/bin/python services/voice/voice_service.py  # 语音服务 http://localhost:8001  (需 --voice)"
 echo ""
-echo "  语音助手设置:"
+echo "  语音服务（HTTP，自带客户端）:"
 echo "    1. 运行 bash setup.sh --voice              安装 Whisper/TTS 依赖"
 echo "    2. 编辑 services/voice/config.json         填写 llm_provider、minimax_api_key 或 deepseek_api_key 等"
 echo "    3. 启动 services/voice/voice_service.py    （本机，服务端）"
-echo "    4. 在 Pi 上安装 agent/requirements.txt 并运行 voice_agent.py"
+echo "    4. POST WAV 到 /voice/process                 自带客户端（Pi/手机/任何设备）"
 echo ""

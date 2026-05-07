@@ -290,6 +290,30 @@ def get_today() -> list:
     return get_date_entries(_today())
 
 
+def _latest_weight_g(data: dict) -> int | None:
+    """从已加载的 _load() 数据里找最新一条 weight entry 的 value（克）。
+
+    babies 不会每天称重，所以扫所有日期。耗时 O(n)，n=条目总数，对当前规模可忽略。
+    返回 None 表示从未录入过 → 由 caller fallback 到 config.baby.weight_g。
+    """
+    latest_ts  = -1
+    latest_val = None
+    for entries in data.values():
+        for e in entries:
+            if e.get("type") != "weight" or e.get("value") is None:
+                continue
+            ts = e.get("ts", 0)
+            if ts > latest_ts:
+                latest_ts  = ts
+                latest_val = e["value"]
+    if latest_val is None:
+        return None
+    try:
+        return int(latest_val)
+    except (TypeError, ValueError):
+        return None
+
+
 def get_stats() -> dict:
     data          = _load()
     today_str     = _today()
@@ -336,8 +360,10 @@ def get_stats() -> dict:
     bottle_ml = sum(e.get("amount_ml", 0) or 0 for e in bottles)
 
     # ── 推荐喂奶量 ────────────────────────
+    # 体重优先级：最近一次 /log weight entry > config.baby.weight_g > 无
+    # 这样从 Discord / 网页录入体重可立即反映到推荐奶量，无需重启或改 config
     rec_ml     = None
-    weight_g   = int(BABY.get("weight_g", 0))
+    weight_g   = _latest_weight_g(data) or int(BABY.get("weight_g", 0))
     age_days   = 0
     bd = _parse_birth_date(BABY.get("birth_date", ""))
     if bd:

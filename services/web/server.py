@@ -117,10 +117,23 @@ async def _lifespan(_: FastAPI):
 
     token = DISCORD_TOKEN
     if token:
+        async def _bot_add_entry(entry: dict) -> dict:
+            e = baby_log.add_entry(entry)
+            await state.broadcast({"type": "baby_stats", **baby_log.get_stats()})
+            return e
+
+        async def _bot_delete_entry(ts: int) -> bool:
+            ok = baby_log.delete_entry(ts)
+            if ok:
+                await state.broadcast({"type": "baby_stats", **baby_log.get_stats()})
+            return ok
+
         gw = GatewayClient(
             token,
             lambda: sensor_state,
             lambda: (baby_log.get_today(), baby_log.get_stats()),
+            add_entry=_bot_add_entry,
+            delete_entry=_bot_delete_entry,
         )
         asyncio.create_task(gw.run())
 

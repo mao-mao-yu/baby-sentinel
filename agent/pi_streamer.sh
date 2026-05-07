@@ -37,20 +37,21 @@ echo ""
 
 # Loop: auto-restart on ffmpeg crash
 while true; do
-    # ALSA 拿原始 stereo（ReSpeaker UAC1.0 firmware 是 2ch 输出，c1 通常是 AEC
-    # 参考通道几乎静音，所以必须显式取 c0）→ 频段限制 + afftdn 频谱降噪
-    # → libopus 64k VBR lowdelay。
+    # ALSA 拿原始 stereo（ReSpeaker UAC1.0 firmware 是 2ch 输出，c1 是 AEC
+    # 参考通道几乎静音，必须显式取 c0）→ 频段限制 → libopus 64k VBR lowdelay。
     #
-    # filter 链解析：
-    #   pan=mono|c0=c0       取 c0 单声道（c1 是空的）
+    # filter 链：
+    #   pan=mono|c0=c0       取 c0 单声道
     #   highpass=f=80        砍 80Hz 以下 USB 嗡声 / 工频
-    #   lowpass=f=8000       砍 8kHz 以上语音外频段（hiss 主要在这里）
-    #   afftdn=nr=12:nt=w    FFT 噪声谱估计 + 减除，nr 越大越激进，
-    #                        12 dB 是 voice-friendly 甜点；nt=w 自动学噪声谱
+    #   lowpass=f=8000       砍 8kHz 以上（语音 baby 监控用不到）
+    #
+    # 注：afftdn FFT 降噪曾试过，但 nr=12 在静室里产生"水下/咕嘟"musical noise，
+    # 听感比硬件底噪更难受，所以删掉。如果换线/换电源后底噪还在，再考虑加
+    # `agate`（noise gate，无 artifacts）替代 afftdn。
     ffmpeg \
         -loglevel warning \
         -f alsa -ac 2 -ar "$SAMPLE_RATE" -i "$ALSA_DEVICE" \
-        -af "pan=mono|c0=c0,highpass=f=80,lowpass=f=8000,afftdn=nr=12:nt=w" \
+        -af "pan=mono|c0=c0,highpass=f=80,lowpass=f=8000" \
         -c:a libopus \
         -b:a "$BITRATE" \
         -vbr constrained \
