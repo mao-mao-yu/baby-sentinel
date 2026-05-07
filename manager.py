@@ -31,6 +31,14 @@ from shared.config import ROOT_CFG, BASE_DIR
 MANAGER_PORT = ROOT_CFG.get("manager_port", 9091)
 _GO2RTC_EXE  = "go2rtc.exe" if sys.platform == "win32" else "go2rtc"
 
+# Pi remote (BLE 现在跑在 Pi 上的 sense-u-ble 服务里)
+_PI_HOST = ROOT_CFG.get("pi_host", "")
+_PI_USER = ROOT_CFG.get("pi_ssh_user", "pi")
+_PI_KEY  = os.path.expanduser(ROOT_CFG.get("pi_ssh_key", "~/.ssh/id_rsa"))
+
+import shutil as _shutil
+_SSH_BIN = _shutil.which("ssh") or "ssh"
+
 # 子进程组隔离：Unix 用 setsid（new session），Windows 用 CREATE_NEW_PROCESS_GROUP，
 # 让 _kill_tree 能干净地把整棵子进程树带走，且 manager 收到 Ctrl+C 不会直接传给子进程
 _PROC_GROUP_KW: dict = (
@@ -43,6 +51,39 @@ if _go2rtc_p:
     GO2RTC_BIN = _go2rtc_p if os.path.isabs(_go2rtc_p) else os.path.join(BASE_DIR, _go2rtc_p)
 else:
     GO2RTC_BIN = os.path.join(BASE_DIR, "bin", _GO2RTC_EXE)
+
+
+# ── 远端 SSH 帮手（用于 BLE 跑在 Pi 上） ──────────────────────────────
+
+def _ssh_args(remote: dict) -> list[str]:
+    """构造 ssh 通用参数：BatchMode + StrictHostKey accept-new + 短超时。"""
+    return [
+        _SSH_BIN, "-i", remote["key"],
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=5",
+        "-o", "ServerAliveInterval=20",
+        "-o", "ServerAliveCountMax=3",
+        f"{remote['user']}@{remote['host']}",
+    ]
+
+
+async def _ssh_run(remote: dict, cmd: str, timeout: float = 15) -> tuple[int, str]:
+    """ssh + 执行命令 → (exit_code, stdout+stderr)。失败/超时不抛异常。"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *_ssh_args(remote), cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except Exception as e:
+        return -1, f"[ssh spawn fail] {e}"
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return -1, "[ssh timeout]"
+    return proc.returncode or 0, out.decode(errors="replace")
 
 
 def _gen_go2rtc_yaml():
@@ -95,14 +136,22 @@ SERVICES: dict[str, dict] = {
         "script":     "bin/go2rtc",
     },
     "ble": {
-        "name":       "BLE Sensor",
+        "name":       "BLE Sensor (Pi)",
         "icon":       "📡",
-        "desc":       f"Sense-U 蓝牙传感器   :{ROOT_CFG.get('ble_port', 8082)}",
-        "cmd":        [sys.executable, "-u", "services/ble/service.py"],
-        "port":       ROOT_CFG.get("ble_port", 8082),
-        # adoptable: manager 重启时不杀 → 蓝牙连接不中断（BLE 重连要 10-30s）
-        "adoptable":  True,
-        "script":     "services/ble/service.py",
+        "desc":       (
+            f"sense-u-ble → Pi: {_PI_HOST}" if _PI_HOST
+            else "BLE: 未配置 pi_host (config.json)"
+        ),
+        # remote 模式：服务跑在 Pi 上的 systemd --user 单元里。
+        # start/stop/restart 都通过 ssh 走，本地只跑一个 journalctl tail 给 UI 抓日志。
+        "remote": {
+            "host":     _PI_HOST,
+            "user":     _PI_USER,
+            "key":      _PI_KEY,
+            "unit":     "sense-u-ble.service",
+            "git_path": "/home/maomaoyu/sense-u-ble",
+        },
+        "port":       None,
     },
     "server": {
         "name":       "BabySentinel Server",
@@ -238,7 +287,73 @@ def _find_external_proc(svc: str) -> int | None:
     return None
 
 
+async def _do_start_remote(svc: str):
+    """远端 systemd --user 服务启动 + 本地起一个 journalctl tail 把日志吐回 UI。"""
+    defn   = SERVICES[svc]
+    remote = defn["remote"]
+    unit   = remote["unit"]
+    if not remote.get("host"):
+        _append_log(svc, "[错误] pi_host 未配置")
+        return
+
+    await _do_stop(svc)   # 先把可能存在的 tail 清掉
+
+    _append_log(svc, f"{'─'*40}")
+    _append_log(svc, f"启动远端: ssh {remote['user']}@{remote['host']} systemctl --user start {unit}")
+
+    code, out = await _ssh_run(remote, f"systemctl --user start {unit}")
+    if code != 0:
+        _append_log(svc, f"[启动失败 code={code}] {out.strip()[:300]}")
+        return
+    _append_log(svc, "远端 unit 已启动，开始抓日志...")
+
+    # journalctl -f 长连接，stdout 持续吐 → 用 _drain 走入 _logs deque
+    # 注：用 _SYSTEMD_USER_UNIT 过滤而不是 `--user`，因为部分 Pi 配置下 user journal
+    # 不写盘（"No journal files were found"），但 user 单元的日志仍在系统 journal 里。
+    try:
+        tail_proc = await asyncio.create_subprocess_exec(
+            *_ssh_args(remote),
+            f"journalctl _SYSTEMD_USER_UNIT={unit} -f -o cat -n 0",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            **_PROC_GROUP_KW,
+        )
+        _procs[svc]  = tail_proc
+        _starts[svc] = time.time()
+        asyncio.create_task(_drain(svc, tail_proc.stdout))
+    except Exception as e:
+        _append_log(svc, f"[日志 tail 启动失败] {e}")
+
+
+async def _do_stop_remote(svc: str):
+    defn   = SERVICES[svc]
+    remote = defn["remote"]
+    unit   = remote["unit"]
+    proc   = _procs.get(svc)
+
+    if remote.get("host"):
+        _append_log(svc, "停止远端 unit...")
+        code, out = await _ssh_run(remote, f"systemctl --user stop {unit}")
+        if code != 0:
+            _append_log(svc, f"[远端 stop 警告 code={code}] {out.strip()[:200]}")
+
+    # 杀本地 tail 子进程
+    if proc and proc.returncode is None:
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=4)
+        except asyncio.TimeoutError:
+            proc.kill()
+        _append_log(svc, f"已停止 (tail code={proc.returncode})")
+    _procs[svc]  = None
+    _starts[svc] = None
+
+
 async def _do_start(svc: str):
+    # 远端服务（如 BLE 跑在 Pi）走独立路径
+    if SERVICES[svc].get("remote"):
+        return await _do_start_remote(svc)
+
     # adoptable 服务：启动前先看是否有外部同名进程能接管，避免重启杀掉正在工作的进程
     if SERVICES[svc].get("adoptable") and _procs[svc] is None:
         existing = _find_external_proc(svc)
@@ -396,6 +511,9 @@ def _kill_tree(pid: int):
 
 
 async def _do_stop(svc: str):
+    if SERVICES[svc].get("remote"):
+        return await _do_stop_remote(svc)
+
     proc = _procs[svc]
     if proc and proc.returncode is None:
         _append_log(svc, "停止中...")
@@ -425,6 +543,7 @@ def _scan_and_kill_orphans() -> None:
     }
 
     # 包含历史路径 recorder_service.py（重构前），避免老进程漏扫成幽灵
+    # services/ble/service.py 仍然 sweep 一次：BLE 已迁到 Pi，但本地若还有上次未退干净的就清掉
     _orphan_pattern = (
         "services/ble/service.py"
         "|services/recorder/service.py"
@@ -530,10 +649,13 @@ async def get_status():
     return JSONResponse({
         svc: {
             **_svc_status(svc),
-            "logs": list(_logs[svc])[-80:],
-            "name": SERVICES[svc]["name"],
-            "icon": SERVICES[svc]["icon"],
-            "desc": SERVICES[svc]["desc"],
+            "logs":     list(_logs[svc])[-80:],
+            "name":     SERVICES[svc]["name"],
+            "icon":     SERVICES[svc]["icon"],
+            "desc":     SERVICES[svc]["desc"],
+            # UI 用这两个 flag 决定是否渲染"检查更新/更新"按钮
+            "remote":   bool(SERVICES[svc].get("remote")),
+            "git":      bool((SERVICES[svc].get("remote") or {}).get("git_path")),
         }
         for svc in SERVICES
     })
@@ -560,6 +682,79 @@ async def restart_svc(svc: str):
     if svc not in SERVICES:
         return JSONResponse({"ok": False, "error": "unknown service"}, status_code=404)
     asyncio.create_task(_do_start(svc))
+    return JSONResponse({"ok": True})
+
+
+# ── 远端 git 自检 / 更新 ─────────────────────────────────────────────
+
+def _remote_git(svc: str) -> dict | None:
+    r = (SERVICES.get(svc) or {}).get("remote") or {}
+    return r if r.get("host") and r.get("git_path") else None
+
+
+@app.get("/api/manager/{svc}/check_update")
+async def check_update(svc: str):
+    """ssh + git fetch + 看本地落后 origin 几个 commit。"""
+    r = _remote_git(svc)
+    if r is None:
+        return JSONResponse({"ok": False, "error": "service is not a remote git service"}, status_code=400)
+
+    cmd = (
+        f"cd {r['git_path']} && "
+        "git fetch -q origin 2>&1 && "
+        "BEHIND=$(git rev-list --count HEAD..origin/HEAD 2>/dev/null) && "
+        "echo \"BEHIND=$BEHIND\" && "
+        "if [ \"$BEHIND\" != 0 ]; then git log -1 --format='LATEST=%h %s' origin/HEAD; fi"
+    )
+    code, out = await _ssh_run(r, cmd, timeout=20)
+    if code != 0:
+        return JSONResponse({"ok": False, "error": out.strip()[:300]}, status_code=500)
+
+    behind = 0
+    latest = ""
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("BEHIND="):
+            try: behind = int(line.split("=", 1)[1])
+            except ValueError: pass
+        elif line.startswith("LATEST="):
+            latest = line.split("=", 1)[1]
+    return JSONResponse({
+        "ok":               True,
+        "behind":           behind,
+        "update_available": behind > 0,
+        "latest_commit":    latest,
+    })
+
+
+@app.post("/api/manager/{svc}/update")
+async def do_update(svc: str):
+    """ssh + git pull + pip install -e . + 重启 unit。"""
+    r = _remote_git(svc)
+    if r is None:
+        return JSONResponse({"ok": False, "error": "service is not a remote git service"}, status_code=400)
+
+    _append_log(svc, f"{'─'*40}")
+    _append_log(svc, "更新中：git pull ...")
+    cmd = f"cd {r['git_path']} && git pull --ff-only 2>&1"
+    code, out = await _ssh_run(r, cmd, timeout=60)
+    for line in out.strip().splitlines()[-10:]:
+        _append_log(svc, f"  git: {line}")
+    if code != 0:
+        _append_log(svc, f"[更新失败 code={code}]")
+        return JSONResponse({"ok": False, "step": "git_pull", "log": out[-500:]}, status_code=500)
+
+    _append_log(svc, "pip install -e . ...")
+    cmd2 = f"cd {r['git_path']} && ./venv/bin/pip install -e . --quiet 2>&1"
+    code2, out2 = await _ssh_run(r, cmd2, timeout=120)
+    for line in out2.strip().splitlines()[-5:]:
+        _append_log(svc, f"  pip: {line}")
+    if code2 != 0:
+        _append_log(svc, f"[pip 失败 code={code2}]")
+        return JSONResponse({"ok": False, "step": "pip", "log": out2[-500:]}, status_code=500)
+
+    _append_log(svc, "重启远端 unit 让新代码生效...")
+    asyncio.create_task(_do_start(svc))   # _do_start 会先 stop 再 start
     return JSONResponse({"ok": True})
 
 

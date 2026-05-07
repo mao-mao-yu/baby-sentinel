@@ -84,10 +84,19 @@ header h1 { font-size: 1rem; font-weight: 600; flex: 1; }
   transition: background .15s, border-color .15s;
 }
 .btn:hover { background: var(--border); }
-.btn.start:hover  { background: #14532d; border-color: var(--green); color: var(--green); }
-.btn.stop:hover   { background: #450a0a; border-color: var(--red);   color: var(--red); }
-.btn.restart:hover{ background: #1e3a5f; border-color: var(--blue);  color: var(--blue); }
+.btn.start:hover        { background: #14532d; border-color: var(--green); color: var(--green); }
+.btn.stop:hover         { background: #450a0a; border-color: var(--red);   color: var(--red); }
+.btn.restart:hover      { background: #1e3a5f; border-color: var(--blue);  color: var(--blue); }
+.btn.check-update:hover { background: #1f2937; border-color: #6b7280;      color: #d1d5db; }
+.btn.update:hover       { background: #4d3008; border-color: #f59e0b;      color: #f59e0b; }
 .btn:disabled { opacity: .4; cursor: default; }
+
+.update-badge {
+  margin: 0 14px 6px;
+  padding: 4px 8px; border-radius: 4px;
+  background: #4d3008; border: 1px solid #f59e0b; color: #fbbf24;
+  font-size: 0.72rem; font-family: monospace;
+}
 
 .log-box {
   flex: 1; min-height: 0;
@@ -163,8 +172,9 @@ applyI18n();
 })();
 
 // 服务列表完全从 API 动态生成，无需在前端硬编码
-let _svcOrder  = [];   // 首次 poll 后填充
+let _svcOrder   = [];  // 首次 poll 后填充
 let _autoScroll = {};  // svc → bool
+let _updateInfo = {};  // svc → { update_available, behind, latest_commit }
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -192,6 +202,30 @@ function renderCard(svc, data) {
   startBtn.disabled   = st === 'running';
   stopBtn.disabled    = st === 'stopped';
   restartBtn.disabled = false;
+
+  // 远端 git 服务：渲染更新按钮 + 可用 badge
+  const checkBtn  = el.querySelector('.btn.check-update');
+  const updateBtn = el.querySelector('.btn.update');
+  const badge     = el.querySelector('.update-badge');
+  if (data.git) {
+    checkBtn.style.display  = '';
+    updateBtn.style.display = '';
+    const u = _updateInfo[svc];
+    if (u && u.update_available) {
+      badge.style.display = '';
+      badge.textContent = `↑ ${u.behind} new — ${u.latest_commit}`;
+      updateBtn.disabled = false;
+    } else {
+      badge.style.display = 'none';
+      updateBtn.disabled = !(u && u.update_available);
+      // 还没查过：允许点 update（会先隐式确认），但灰一点
+      if (!u) updateBtn.disabled = true;
+    }
+  } else {
+    if (checkBtn)  checkBtn.style.display  = 'none';
+    if (updateBtn) updateBtn.style.display = 'none';
+    if (badge)     badge.style.display     = 'none';
+  }
 
   if (data.desc) {
     const descEl = el.querySelector('.card-desc');
@@ -232,10 +266,13 @@ function buildCard(svc, meta) {
       </div>
     </div>
     <div class="card-btns">
-      <button class="btn start"   onclick="action('${svc}','start')">${T.mgrBtnStart}</button>
-      <button class="btn stop"    onclick="action('${svc}','stop')">${T.mgrBtnStop}</button>
-      <button class="btn restart" onclick="action('${svc}','restart')">${T.mgrBtnRestart}</button>
+      <button class="btn start"        onclick="action('${svc}','start')">${T.mgrBtnStart}</button>
+      <button class="btn stop"         onclick="action('${svc}','stop')">${T.mgrBtnStop}</button>
+      <button class="btn restart"      onclick="action('${svc}','restart')">${T.mgrBtnRestart}</button>
+      <button class="btn check-update" style="display:none" onclick="checkUpdate('${svc}')">${T.mgrBtnCheck}</button>
+      <button class="btn update"       style="display:none" onclick="doUpdate('${svc}')">${T.mgrBtnUpdate}</button>
     </div>
+    <div class="update-badge" style="display:none"></div>
     <div class="log-box"></div>
   `;
   div.querySelector('.log-box').addEventListener('scroll', function() {
@@ -271,6 +308,42 @@ async function action(svc, cmd) {
     await fetch(`/api/manager/${svc}/${cmd}`, { method: 'POST' });
     setTimeout(poll, 300);
   } catch(_) {}
+}
+
+async function checkUpdate(svc) {
+  try {
+    const r = await fetch(`/api/manager/${svc}/check_update`);
+    const d = await r.json();
+    if (!d.ok) {
+      alert(`${T.mgrUpdateFail}: ${d.error || '?'}`);
+      return;
+    }
+    _updateInfo[svc] = d;
+    if (d.update_available) {
+      alert(`${T.mgrUpdateAvail}: ${d.behind}\n${d.latest_commit}`);
+    } else {
+      alert(T.mgrUpdateNone);
+    }
+    setTimeout(poll, 100);
+  } catch(e) {
+    alert(`${T.mgrUpdateFail}: ${e}`);
+  }
+}
+
+async function doUpdate(svc) {
+  if (!confirm(T.mgrUpdateConfirm)) return;
+  try {
+    const r = await fetch(`/api/manager/${svc}/update`, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) {
+      alert(`${T.mgrUpdateFail} (${d.step}): ${(d.log || '').slice(-300)}`);
+      return;
+    }
+    _updateInfo[svc] = { update_available: false, behind: 0, latest_commit: '' };
+    setTimeout(poll, 500);
+  } catch(e) {
+    alert(`${T.mgrUpdateFail}: ${e}`);
+  }
 }
 
 poll();
