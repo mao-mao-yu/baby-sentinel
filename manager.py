@@ -151,6 +151,9 @@ SERVICES: dict[str, dict] = {
             "unit":     "sense-u-ble.service",
             "git_path": "/home/maomaoyu/sense-u-ble",
         },
+        # adoptable: manager 退出时**不要** ssh 给 Pi 发 systemctl stop，让 Pi 上的
+        # BLE 服务保持运行；下次 manager 启动会走 adopt 路径只起 tail。
+        "adoptable":  True,
         "port":       None,
     },
     "server": {
@@ -288,13 +291,28 @@ def _find_external_proc(svc: str) -> int | None:
 
 
 async def _do_start_remote(svc: str):
-    """远端 systemd --user 服务启动 + 本地起一个 journalctl tail 把日志吐回 UI。"""
+    """远端 systemd --user 服务启动 + 本地起一个 journalctl tail 把日志吐回 UI。
+
+    Adopt 语义：如果 _procs[svc] 还没 tail（manager 刚启动或 tail 死了）且远端 unit
+    已经 active，跳过 stop+start，只 spawn tail。这样 manager 重启不会打断 Pi 上
+    正在跑的 BLE 服务（保持与本地 adoptable 同样的"零打扰"心智）。
+    """
     defn   = SERVICES[svc]
     remote = defn["remote"]
     unit   = remote["unit"]
     if not remote.get("host"):
         _append_log(svc, "[错误] pi_host 未配置")
         return
+
+    # Adopt path：本地无 tail + 远端 unit 已 active → 直接搭 tail
+    have_tail = (_procs[svc] is not None and _procs[svc].returncode is None)
+    if not have_tail:
+        code, _ = await _ssh_run(remote, f"systemctl --user is-active {unit}", timeout=5)
+        if code == 0:
+            _append_log(svc, f"{'─'*40}")
+            _append_log(svc, f"接管远端 unit (already active)，仅起 journalctl tail")
+            await _spawn_remote_tail(svc, remote, unit)
+            return
 
     await _do_stop(svc)   # 先把可能存在的 tail 清掉
 
@@ -306,10 +324,15 @@ async def _do_start_remote(svc: str):
         _append_log(svc, f"[启动失败 code={code}] {out.strip()[:300]}")
         return
     _append_log(svc, "远端 unit 已启动，开始抓日志...")
+    await _spawn_remote_tail(svc, remote, unit)
 
-    # journalctl -f 长连接，stdout 持续吐 → 用 _drain 走入 _logs deque
-    # 注：用 _SYSTEMD_USER_UNIT 过滤而不是 `--user`，因为部分 Pi 配置下 user journal
-    # 不写盘（"No journal files were found"），但 user 单元的日志仍在系统 journal 里。
+
+async def _spawn_remote_tail(svc: str, remote: dict, unit: str) -> None:
+    """起一个长连接 ssh + journalctl -f 把远端日志吐回本地 _logs deque。
+
+    用 _SYSTEMD_USER_UNIT 过滤而不是 `--user`，因为部分 Pi 配置下 user journal
+    不写盘（"No journal files were found"），但 user 单元的日志仍在系统 journal 里。
+    """
     try:
         tail_proc = await asyncio.create_subprocess_exec(
             *_ssh_args(remote),
@@ -543,10 +566,8 @@ def _scan_and_kill_orphans() -> None:
     }
 
     # 包含历史路径 recorder_service.py（重构前），避免老进程漏扫成幽灵
-    # services/ble/service.py 仍然 sweep 一次：BLE 已迁到 Pi，但本地若还有上次未退干净的就清掉
     _orphan_pattern = (
-        "services/ble/service.py"
-        "|services/recorder/service.py"
+        "services/recorder/service.py"
         "|services/web/server.py"
         "|services/voice/voice_service.py"
         "|recorder_service\\.py"

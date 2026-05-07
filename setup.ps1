@@ -136,7 +136,7 @@ if (Test-Path "config.json") {
 }
 
 # Per-service config: services auto-fallback at first start, but pre-copying lets users edit beforehand
-foreach ($svc in @("ble", "recorder", "voice", "web")) {
+foreach ($svc in @("recorder", "voice", "web")) {
     $src = "services\$svc\config.example.json"
     $dst = "services\$svc\config.json"
     if (Test-Path $dst) {
@@ -148,9 +148,11 @@ foreach ($svc in @("ble", "recorder", "voice", "web")) {
 }
 
 Write-Warn "Please edit configs and fill in:"
-Write-Warn "  config.json:                  tapo_rtsp, baby.birth_date"
-Write-Warn "  services\ble\config.json:     ble_address  (scan with: .\venv\Scripts\python.exe tools\scan.py)"
+Write-Warn "  config.json:                  tapo_rtsp, baby.birth_date, pi_host (BLE runs on the Pi)"
 Write-Warn "  services\voice\config.json:   minimax_api_key or deepseek_api_key (if voice is enabled)"
+Write-Warn ""
+Write-Warn "BLE deployment: see https://github.com/mao-mao-yu/sense-u-ble"
+Write-Warn "  On the Pi: git clone + pip install -e . + config.json + systemd --user service"
 
 # ── 7. Runtime directories ────────────────────────────────────────────
 Write-Step "Creating runtime directories"
@@ -173,13 +175,11 @@ if ($Voice) {
 }
 
 # ── 9. Pairing reminder ───────────────────────────────────────────────
-Write-Step "Sense-U pairing"
-if (Test-Path "baby_code.json") {
-    Write-Ok "baby_code.json exists, no re-pairing needed"
-} else {
-    Write-Warn "Not yet paired. Before first run, execute:"
-    Write-Warn "  .\venv\Scripts\python.exe tools\pairing.py"
-}
+Write-Step "Sense-U pairing (do this on the Pi)"
+Write-Warn "BLE service + pairing tool moved to: https://github.com/mao-mao-yu/sense-u-ble"
+Write-Warn "On the Pi: git clone + pip install -e ., then:"
+Write-Warn "  ./venv/bin/python tools/pairing.py     # one-shot, writes baby_code.json"
+Write-Warn "  systemctl --user enable --now sense-u-ble"
 
 # ── Done ──────────────────────────────────────────────────────────────
 Write-Host ""

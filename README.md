@@ -21,22 +21,24 @@
 ## 系统架构
 
 ```
-manager.py (9091)                      ← 服务管理界面 / 子进程编排（心跳监测、孤儿清理、自动重启）
-├── go2rtc                             ← RTSP → WebRTC 流媒体转发
-├── services/ble/service.py (8082)     ← Sense-U 蓝牙传感器（独立进程，崩溃不影响主服务）
-├── services/web/server.py (8080)      ← Web UI / baby_log REST / WebSocket 广播 / Discord Bot
-└── services/recorder/service.py       ← 连续录像（ffmpeg）+ 传感器时序存档
-
-services/voice/voice_service.py (8001) ← 语音服务（独立启动，HTTP 接口）
-     STT: faster-whisper（CUDA）/ mlx-whisper（Apple Silicon）
-     LLM: MiniMax / DeepSeek（OpenAI 兼容，可切；tool calling → baby_log API）
-     TTS: MiniMax WebSocket 流式 / edge-tts 备用
-     端点：POST /voice/process  body=WAV → response=WAV（自带客户端：手机/Pi/桌面均可）
+Mac / Linux 主机                                    Pi (推荐)
+┌─────────────────────────────────────────────┐    ┌────────────────────────┐
+│ manager.py (9091)                            │    │ sense-u-ble :8082      │
+│ ├── go2rtc                                   │    │   独立 repo，systemd   │
+│ ├── services/web/server.py (8080)            │    │   --user 单元自启      │
+│ │     ↑ 接收 sensor/alert push (POST)        │←───┤   推送 BLE 数据回主机  │
+│ └── services/recorder/service.py             │    │                        │
+│                                              │    │  https://github.com/    │
+│ services/voice/voice_service.py (8001)       │    │  mao-mao-yu/sense-u-ble │
+│   POST /voice/process  WAV→WAV               │    └────────────────────────┘
+└─────────────────────────────────────────────┘
 ```
 
+**BLE 服务 (Sense-U Baby Pro 接入)** 已抽离为独立 repo [`sense-u-ble`](https://github.com/mao-mao-yu/sense-u-ble) 跑在 Raspberry Pi 上，通过 HTTP 把传感器数据 / 告警事件推回到这个主机的 `/api/internal/sensor`。Manager UI 里的 BLE 卡片通过 SSH 控制 Pi 上的 systemd unit 启停 + 自检 git 更新。
+
 各服务配置**分而治之**：
-- 根目录 `config.json` —— 跨服务字段（端口、宝宝信息、RTSP、推送凭据、语言）
-- `services/{ble,recorder,voice,web}/config.json` —— 各服务自己的内部参数
+- 根目录 `config.json` —— 跨服务字段（端口、宝宝信息、RTSP、推送凭据、语言、`pi_host`）
+- `services/{recorder,voice,web}/config.json` —— 各服务自己的内部参数
 - 启动时各服务先读自己的 service config，再 fallback 到 root config
 
 各服务**独立进程**，通过 HTTP 和文件互相通信。manager 维护服务生命周期：
@@ -94,25 +96,26 @@ bash setup.sh
 
 配置分两层：
 
-- **根 `config.json`** —— 跨服务字段（端口、宝宝信息、RTSP、推送凭据、语言）
-- **`services/{ble,recorder,voice,web}/config.json`** —— 各服务自己的内部参数
+- **根 `config.json`** —— 跨服务字段（端口、宝宝信息、RTSP、推送凭据、语言、`pi_host`）
+- **`services/{recorder,voice,web}/config.json`** —— 各服务自己的内部参数
 
 > 安装脚本会从对应的 `config.example.json` 复制初始模板。不存在的字段自动从 example 兜底，新版本加字段时旧配置不会失效。
 
-**最小必填**（根 `config.json` + `services/ble/config.json`）：
+**最小必填**（根 `config.json`）：
 
 ```jsonc
-// config.json
 {
   "tapo_rtsp": "rtsp://user:pass@192.168.1.x:554/stream1",
-  "baby": { "birth_date": "20240101", "feed_interval_min": 150 }
-}
+  "baby": { "birth_date": "20240101", "feed_interval_min": 150 },
 
-// services/ble/config.json
-{
-  "ble_address": "AA:BB:CC:DD:EE:FF"
+  // BLE 跑在 Pi，配 SSH 三件套让 manager UI 能控制 Pi 服务
+  "pi_host":     "192.168.0.20",
+  "pi_ssh_user": "pi",
+  "pi_ssh_key":  "~/.ssh/pi_key"
 }
 ```
+
+> BLE (Sense-U Baby Pro) 部署在 Pi 上的 [`sense-u-ble`](https://github.com/mao-mao-yu/sense-u-ble) repo，配置在 Pi 的 `~/sense-u-ble/config.json` 里——见该 repo README。本机 manager 通过 SSH 远程控制启停 + git 自检。
 
 ### 根 `config.json` 字段
 
@@ -170,23 +173,21 @@ bash setup.sh
 | `baby.feed_type` | `formula` | `formula`（配方奶）或 `breastfeed`（母乳） |
 | `baby.feed_interval_min` | `150` | 喂奶间隔提醒（分钟） |
 
-### `services/ble/config.json`（BLE 服务内部）
+### BLE (Sense-U Baby Pro) 配置 → 在 Pi 上的 [`sense-u-ble`](https://github.com/mao-mao-yu/sense-u-ble) repo
 
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `ble_address` | — | Sense-U 蓝牙地址。**Windows/Linux** 写真实 MAC（如 `D4:92:DB:03:D7:59`）。**macOS** 写 CoreBluetooth UUID（每台 Mac 不同，扫描得到，如 `0B5602EE-…`） |
-| `ble_mac` | `""` | 仅 macOS 需要：设备真实 MAC 地址，用于构造 GATT 特征 UUID。Windows/Linux 留空（自动从 `ble_address` 取） |
-| `ble_dump_raw` | `false` | 诊断开关：开启后所有 BLE 数据帧 hex dump 进日志，调试协议时用 |
-| `ble_scan_timeout_s` | `20` | 扫描设备最长等待（秒） |
-| `ble_connect_timeout_s` | `15` | GATT 连接超时（秒） |
-| `ble_reconnect_delay_s` | `10` | 断开后重连前等待（秒） |
-| `prone_alert_threshold_s` | `30` | 俯卧持续多少秒**才第一次**报警 |
-| `prone_alert_cooldown_s` | `300` | 仍在俯卧时**重复**报警的最小间隔（秒） |
-| `breath_alert_threshold_rate` | `8` | 呼吸频率低于此值（次/分）触发告警 |
-| `breath_alert_duration_s` | `20` | 必须连续低呼吸多少秒（且必须贴身）才报警 |
-| `breath_alert_cooldown_s` | `300` | 重复呼吸告警的最小间隔（秒） |
+BLE 服务和所有相关配置（`ble_address` / `ble_mac` / 告警阈值 / 配对工具）都迁到了独立 repo。在 Pi 上：
 
-> macOS 上 bleak 用的是 CoreBluetooth UUID（每台机器自己分配，不能用 MAC）。`ble_mac` 字段是给 GATT 特征 UUID 拼接用的，跟设备 MAC 一致，跨设备通用。Windows/Linux 这两个字段功能合一，只填 `ble_address`。
+```bash
+git clone https://github.com/mao-mao-yu/sense-u-ble.git ~/sense-u-ble
+cd ~/sense-u-ble
+python -m venv venv && ./venv/bin/pip install -e .
+cp config.example.json config.json   # 填 ble_address + consumer_url 指向 Mac
+./venv/bin/python tools/pairing.py    # 一次性获取 baby_code.json
+systemctl --user enable --now sense-u-ble.service
+loginctl enable-linger $USER          # 重启自动起，无需登录
+```
+
+详细参数 + systemd unit 模板见该 repo 的 README。
 
 ### `services/recorder/config.json`（录像服务）
 
@@ -229,33 +230,15 @@ bash setup.sh
 
 > `config.json` 没填写的字段会自动从 `config.example.json` 兜底。新版本加字段时旧配置不会失效。
 
-### 获取 Sense-U 蓝牙地址
+### Sense-U 设备扫描 + 配对（在 Pi 上）
 
 ```bash
-# Windows
-.\venv\Scripts\python.exe tools\scan.py
-
-# macOS
-./venv/bin/python tools/scan.py
+# 在 Pi 上的 sense-u-ble repo 里
+./venv/bin/python tools/scan.py        # 列出附近 BLE 设备，找 Sense-U Baby Pro
+./venv/bin/python tools/pairing.py     # 一次性配对，写出 baby_code.json
 ```
 
-扫描结果会列出附近 BLE 设备 + 地址 + 名字，找到 `Sense-U Baby Pro` 那一项填进 `config.json`。
-
----
-
-## 首次配对 Sense-U
-
-首次使用前必须配对一次，生成认证令牌 `baby_code.json`：
-
-```bash
-# Windows
-.\venv\Scripts\python.exe tools\pairing.py
-
-# macOS
-./venv/bin/python tools/pairing.py
-```
-
-按提示长按设备进入配对模式（蓝灯快闪）。配对成功后会写入 `baby_code.json`，**baby_code 跨平台通用**——你可以把这个文件复制到另一台机器（如 Pi）继续用。
+`baby_code.json` 跨设备通用——如果你之前在另一台机器配对过，直接 `scp` 过来到 Pi 的 sense-u-ble 目录即可。
 
 ---
 
@@ -273,15 +256,15 @@ bash setup.sh
 
 打开管理界面：**http://localhost:9091**
 
-manager 会按顺序启动：go2rtc → ble_service → server → recorder。
+manager 会按顺序启动：go2rtc → server → recorder → voice。BLE service 跑在 Pi 上的 sense-u-ble，manager UI 通过 SSH 远程控制（启停、日志、git 自检更新）。
 
 ### 单独启动各服务（调试用）
 
 ```bash
-./venv/bin/python services/ble/service.py        # 仅 BLE 传感器
-./venv/bin/python services/web/server.py         # 仅主 Web 服务
-./venv/bin/python services/recorder/service.py   # 仅录像
+./venv/bin/python services/web/server.py           # 仅主 Web 服务（含 Discord Bot）
+./venv/bin/python services/recorder/service.py     # 仅录像
 ./venv/bin/python services/voice/voice_service.py  # 语音服务
+# BLE: 在 Pi 上 systemctl --user start sense-u-ble.service
 ```
 
 ---
@@ -589,11 +572,6 @@ baby-sentinel/
 │       └── bark_send.py             # Bark 多 device key 推送
 │
 ├── services/
-│   ├── ble/                         # 8082 — Sense-U BLE 服务
-│   │   ├── service.py
-│   │   ├── protocol.py              # BLE 协议解析（Sense-U Baby Pro）
-│   │   ├── config.{json,example.json,py}
-│   │   └── ...
 │   ├── web/                         # 8080 — Web UI / baby_log REST / Discord Bot
 │   │   ├── server.py
 │   │   ├── baby_log.py              # 育儿日志（SQLite）
@@ -606,31 +584,15 @@ baby-sentinel/
 │       ├── voice_service.py
 │       ├── stt.py                   # Whisper STT（faster-whisper / mlx-whisper）
 │       ├── llm_agent.py             # tool calling + 对话历史
-│       ├── llm/                     # LLM provider 抽象
-│       │   ├── base.py              # OpenAI 兼容接口
-│       │   ├── minimax.py
-│       │   └── deepseek.py
-│       ├── tools/
-│       │   └── baby_records.py      # LLM 工具：写/撤销育儿日志
-│       ├── tts/
-│       │   ├── minimax.py           # MiniMax WebSocket 流式 TTS
-│       │   └── edge.py              # edge-tts 备用
+│       ├── llm/                     # LLM provider 抽象（base/minimax/deepseek）
+│       ├── tools/baby_records.py    # LLM 工具：写/撤销育儿日志
+│       ├── tts/                     # minimax (WS 流式) / edge-tts
 │       └── config.{json,example.json,py}
 │
-├── agent/                           # 语音端（Pi / Mac with mic）
-│   ├── voice_agent.py               # 主程序
-│   ├── audio_capture.py             # PyAudio 麦克风
-│   ├── playback.py                  # WAV 播放
-│   ├── white_noise.py               # 白噪音保活（防 BT 喇叭休眠）
-│   ├── generate_sounds.py
-│   ├── config.py
-│   └── sounds/
+├── agent/                           # 仅剩 pi_streamer.sh：Pi 上 ReSpeaker → mediamtx
+│   └── pi_streamer.sh               # 可选；把 Pi 麦克风音频流接到 go2rtc baby 流
 │
 ├── tools/
-│   ├── scan.py                      # BLE 设备扫描
-│   ├── pairing.py                   # Sense-U 首次配对
-│   ├── discover.py                  # GATT 服务发现（调试）
-│   ├── adv_scan.py                  # BLE 广播扫描（调试）
 │   └── test_llm.py                  # LLM toolcall 调试 CLI（跳过 STT/TTS）
 │
 ├── docs/                            # 设计文档（gitignored）
@@ -888,11 +850,12 @@ LLM 配置了以下工具，说中文或日语均可触发：
 
 ## 常见问题
 
-**BLE 连接失败 / 找不到设备**
-- 确认 `services/ble/config.json` 中的 `ble_address` 正确（运行 `tools/scan.py` 重新扫描）
-- 确认根目录 `baby_code.json` 存在（首次必须 `tools/pairing.py` 配对）
-- macOS 需在系统设置 → 隐私与安全性 → 蓝牙中授权终端 / VS Code
-- macOS 上 `ble_address` 必须是 CoreBluetooth UUID 不是 MAC，且 `ble_mac` 必须填真实 MAC
+**BLE 连接失败 / 找不到设备 / Mac UI 看不到传感器数据**
+- BLE 跑在 Pi 上的 [`sense-u-ble`](https://github.com/mao-mao-yu/sense-u-ble) 里。先在 Pi 上确认服务活：`ssh pi 'systemctl --user status sense-u-ble'`
+- 确认 Pi 蓝牙开了：`ssh pi 'bluetoothctl show | grep Powered'`，应为 `Powered: yes`。如果 `off-blocked` 见 sense-u-ble README 里的 rfkill unblock 章节
+- 确认 Pi 推得到 Mac：sense-u-ble 的 `consumer_url` 必须能连通到 `Mac:8080/api/internal/sensor`（局域网防火墙 / Mac 端 web service 跑着）
+- 配对令牌 `~/sense-u-ble/baby_code.json` 缺失或失效：在 Pi 上跑 `./venv/bin/python tools/pairing.py` 重配
+- Mac 端 manager UI 里 BLE 卡 status=stopped：通过卡上的 ▶ 启动 重新拉起 Pi 服务（走 SSH）
 
 **摄像头画面无法显示**
 - 确认 `tapo_rtsp` 地址正确（VLC 测试 `vlc rtsp://...`）

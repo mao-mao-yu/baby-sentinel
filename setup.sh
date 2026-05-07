@@ -135,7 +135,7 @@ else
 fi
 
 # Per-service config: 各服务首启时也会自动 fallback，但提前 copy 一份方便用户预编辑
-for svc in ble recorder voice web; do
+for svc in recorder voice web; do
     src="services/$svc/config.example.json"
     dst="services/$svc/config.json"
     if [[ -f "$dst" ]]; then
@@ -147,9 +147,11 @@ for svc in ble recorder voice web; do
 done
 
 yellow "请编辑配置填写必填项:"
-yellow "  config.json:                       tapo_rtsp、baby.birth_date"
-yellow "  services/ble/config.json:          ble_address  (扫描: ./venv/bin/python tools/scan.py)"
+yellow "  config.json:                       tapo_rtsp、baby.birth_date、pi_host (BLE 跑在 Pi 上)"
 yellow "  services/voice/config.json:        minimax_api_key 或 deepseek_api_key（如启用语音）"
+yellow ""
+yellow "BLE 部署：参考 https://github.com/mao-mao-yu/sense-u-ble"
+yellow "  在 Pi 上 git clone + pip install -e . + 配 config.json + 起 systemd --user 服务"
 
 # ── 7. 目录结构 ───────────────────────────────────────────────────────
 step "创建运行时目录"
@@ -177,13 +179,11 @@ else
 fi
 
 # ── 9. 配对提示 ───────────────────────────────────────────────────────
-step "Sense-U 配对"
-if [[ -f "baby_code.json" ]]; then
-    green "baby_code.json 已存在，无需重新配对"
-else
-    yellow "尚未配对，首次运行前请执行:"
-    yellow "  ./venv/bin/python tools/pairing.py"
-fi
+step "Sense-U 配对（在 Pi 上做）"
+yellow "BLE 服务和配对工具已迁到独立 repo: https://github.com/mao-mao-yu/sense-u-ble"
+yellow "在 Pi 上 git clone + pip install -e . 后:"
+yellow "  ./venv/bin/python tools/pairing.py     # 一次性获取 baby_code.json"
+yellow "  systemctl --user enable --now sense-u-ble"
 
 # ── 完成 ──────────────────────────────────────────────────────────────
 echo ""

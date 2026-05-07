@@ -18,7 +18,6 @@ FEED_REPEAT_S:   int = int(_SVC.get("feed_repeat_s", 1800))
 # 通知凭据归属 root —— 因为 shared/alerts 也要读（被 BLE 等多服务调用）
 DISCORD_TOKEN: str = ROOT_CFG.get("discord_token", "")
 WEB_PORT:              int   = int(ROOT_CFG.get("web_port", 8080))
-BLE_PORT:              int   = int(ROOT_CFG.get("ble_port", 8082))
 MANAGER_PORT:          int   = int(ROOT_CFG.get("manager_port", 9091))
 SEGMENT_S:             int   = int(ROOT_CFG.get("segment_s", 360))  # for playback UI alignment
 BLE_POLL_INTERVAL_S:   float = float(ROOT_CFG.get("ble_poll_interval_s", 2))

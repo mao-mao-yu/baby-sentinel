@@ -25,12 +25,13 @@ from shared.alerts import trigger_alert
 from shared.i18n import t
 from shared.notify.discord_bot import GatewayClient
 from services.web.config import (
-    WEB_HOST, WEB_PORT, BLE_PORT, MANAGER_PORT,
+    WEB_HOST, WEB_PORT, MANAGER_PORT,
     FEED_REPEAT_S, BLE_HEALTH_TIMEOUT_S, BLE_POLL_INTERVAL_S,
     SEGMENT_S, BABY, DISCORD_TOKEN,
 )
+from shared.config import ROOT_CFG
 
-# BLE 字段由 ble_service.py 进程管理，通过 /api/internal/sensor 推送过来
+# BLE 字段由远端 sense-u-ble (Pi) 服务通过 /api/internal/sensor 推送过来
 _BLE_FIELDS = frozenset((
     "breath_rate", "temperature", "posture",
     "battery", "ble_ok", "last_update",
@@ -260,11 +261,21 @@ async def internal_sensor_push(request: Request):
 
 @app.post("/api/sensor/refresh")
 async def post_sensor_refresh():
-    """代理到 ble_service.py，触发设备重新推送所有传感器数据。"""
-    ble_port = BLE_PORT
+    """代理到 Pi 上的 sense-u-ble 服务，触发设备立即推送一份完整传感器快照。
+
+    sense-u-ble 跑在 Pi 上的 systemd --user 单元里，监听 :8082。这里通过 pi_host
+    转发，让 web UI 的"立即刷新"按钮仍然可用。pi_host 未配置时直接返回 503。
+    """
+    pi_host = ROOT_CFG.get("pi_host", "").strip()
+    if not pi_host:
+        return JSONResponse(
+            {"ok": False, "error": "pi_host not configured", "ble_connected": False},
+            status_code=503,
+        )
+    pi_port = int(ROOT_CFG.get("ble_port", 8082))
     try:
         req = urllib.request.Request(
-            f"http://127.0.0.1:{ble_port}/api/sensor/refresh",
+            f"http://{pi_host}:{pi_port}/api/sensor/refresh",
             data=b"", method="POST",
         )
         loop = asyncio.get_event_loop()
