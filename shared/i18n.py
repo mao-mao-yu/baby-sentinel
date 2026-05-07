@@ -24,6 +24,7 @@ _TR: dict[str, dict] = {
         # Discord 状态卡片
         "discord_cmd_desc_sensor":  "赤ちゃんのセンサーをリアルタイム表示",
         "discord_cmd_desc_today":   "今日の育児記録を表示",
+        "discord_cmd_desc_log":     "育児イベントを記録",
         "discord_title":        "👶 赤ちゃんのリアルタイム状態",
         "discord_ble_on":       "接続中",
         "discord_ble_off":      "未接続",
@@ -62,6 +63,28 @@ _TR: dict[str, dict] = {
         "side_right": "右",
         "side_both":  "両側",
         "diaper_kinds": {"wet": "💧", "dirty": "💩", "both": "💧💩"},
+        "diaper_kind_wet":   "おしっこ",
+        "diaper_kind_dirty": "うんち",
+        "diaper_kind_both":  "両方",
+
+        # Discord /log UI
+        "log_menu_title":    "📝 記録するイベントを選択:",
+        "log_pick_side":     "🤱 授乳側を選択:",
+        "log_pick_kind":     "👶 オムツの種類を選択:",
+        "log_undo_btn":      "↩️ 直近を取り消す",
+        "log_logged":        "✅ 記録しました",
+        "log_undone":        "↩️ 取り消しました",
+        "log_no_undo":       "ℹ️ 今日はまだ記録がありません",
+        "log_unavailable":   "❌ /log 利用不可：書き込みパスが無効",
+        "log_invalid_arg":   "❌ 入力が無効です",
+        "log_failed":        "❌ 記録に失敗",
+        "log_unknown_action":"❌ 未知の操作",
+        "log_field_amount_ml":"ミリリットル / mL",
+        "log_field_minutes":  "分 / Minutes",
+        "log_field_temp":     "体温 °C (例: 37.2)",
+        "log_field_weight":   "グラム / Grams",
+        "log_field_height":   "センチ / cm",
+        "log_field_time":     "時刻 HH:MM (空=今)",
 
         # 姿势 enum 中文 → 显示语言
         "postures": {
@@ -80,6 +103,7 @@ _TR: dict[str, dict] = {
 
         "discord_cmd_desc_sensor":  "查看宝宝实时传感器状态",
         "discord_cmd_desc_today":   "查看今天的育儿记录",
+        "discord_cmd_desc_log":     "记录育儿事件",
         "discord_title":        "👶 宝宝实时状态",
         "discord_ble_on":       "已连接",
         "discord_ble_off":      "未连接",
@@ -116,6 +140,28 @@ _TR: dict[str, dict] = {
         "side_right": "右",
         "side_both":  "双侧",
         "diaper_kinds": {"wet": "💧", "dirty": "💩", "both": "💧💩"},
+        "diaper_kind_wet":   "尿",
+        "diaper_kind_dirty": "便便",
+        "diaper_kind_both":  "都有",
+
+        # Discord /log UI
+        "log_menu_title":    "📝 选择要记录的事件:",
+        "log_pick_side":     "🤱 选择哺乳侧:",
+        "log_pick_kind":     "👶 选择尿布类型:",
+        "log_undo_btn":      "↩️ 撤销最后一条",
+        "log_logged":        "✅ 已记录",
+        "log_undone":        "↩️ 已撤销",
+        "log_no_undo":       "ℹ️ 今日暂无记录可撤销",
+        "log_unavailable":   "❌ /log 不可用：服务端未启用写入",
+        "log_invalid_arg":   "❌ 参数错误",
+        "log_failed":        "❌ 记录失败",
+        "log_unknown_action":"❌ 未知操作",
+        "log_field_amount_ml":"毫升 / mL",
+        "log_field_minutes":  "分钟 / Minutes",
+        "log_field_temp":     "体温 °C（如 37.2）",
+        "log_field_weight":   "克 / Grams",
+        "log_field_height":   "厘米 / cm",
+        "log_field_time":     "时间 HH:MM (留空=现在)",
 
         "postures": {
             "仰卧": "仰卧", "俯卧": "俯卧",
