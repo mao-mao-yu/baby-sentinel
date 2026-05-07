@@ -102,10 +102,8 @@ def get_date_entries(date_str: str) -> list:
         )]
 
 
-# ── dict-of-lists 桥接 ───────────────────────────────────────────────
-# 业务函数（add_entry/update_entry/delete_entry/get_stats）需要遍历整本日志
-# 来处理跨日睡眠等场景，这里保留 _load/_save 提供 dict-of-lists 视图。
-# _save 走全量重写：当前数据规模（百~千条）性能足够。
+# ── dict-of-lists 视图（仅 get_stats 需要扫整本日志做跨日 / 长尾统计）──
+# 写路径（add/update/delete）已经直接走 SQL 单行事务，不再需要 _save。
 
 def _load() -> dict:
     out: dict = {}
@@ -115,19 +113,87 @@ def _load() -> dict:
     return out
 
 
-def _save(data: dict) -> None:
-    rows: list = []
-    for date_key, entries in data.items():
-        for e in entries:
-            rows.append(_entry_to_row(e, date_key))
-    with _db_lock, _connect() as conn:
-        conn.execute("DELETE FROM entries")
-        if rows:
-            conn.executemany(
-                "INSERT INTO entries (ts, date, type, time, action, payload) VALUES (?,?,?,?,?,?)",
-                rows,
-            )
-        conn.commit()
+# ── 写路径用的 SQL 辅助 ───────────────────────────────────────────────
+
+def _next_free_ts(
+    conn: sqlite3.Connection, base_ts: int, exclude_ts: int | None = None
+) -> int:
+    """从 base_ts 开始找最近一个未占用的 ts（同一分钟多条记录会 +1 错开）。
+    exclude_ts 用于 update：把当前正在编辑的行排除在"占用"之外。"""
+    ts = base_ts
+    while True:
+        if exclude_ts is None:
+            hit = conn.execute("SELECT 1 FROM entries WHERE ts=?", (ts,)).fetchone()
+        else:
+            hit = conn.execute(
+                "SELECT 1 FROM entries WHERE ts=? AND ts!=?", (ts, exclude_ts)
+            ).fetchone()
+        if not hit:
+            return ts
+        ts += 1
+
+
+def _find_open_sleep_start_db(
+    conn: sqlite3.Connection,
+    before_ts: int,
+    date_pref: tuple[str, ...],
+) -> tuple[int, str, dict] | None:
+    """语义对齐 _find_open_sleep_start (list 版)：在 date_pref 列出的日期里
+    按优先级查找第一个未闭合的 sleep-start（cross_day_wake_ts 未设 → 视为未闭合）。
+    返回 (ts, date, payload_dict) 或 None。"""
+    for d in date_pref:
+        rows = conn.execute(
+            "SELECT ts, action, payload FROM entries "
+            "WHERE type='sleep' AND date=? AND ts<? "
+            "ORDER BY ts",
+            (d, before_ts),
+        ).fetchall()
+        cur: tuple[int, str, dict] | None = None
+        for r in rows:
+            payload = json.loads(r["payload"]) if r["payload"] else {}
+            if r["action"] == "start" and not payload.get("cross_day_wake_ts"):
+                cur = (r["ts"], d, payload)
+            elif r["action"] == "end" and cur is not None:
+                cur = None
+        if cur is not None:
+            return cur
+    return None
+
+
+def _clear_cross_day_wake_db(conn: sqlite3.Connection, wake_ts: int) -> None:
+    """把任何 payload.cross_day_wake_ts == wake_ts 的 sleep-start 标记清掉。
+    SQLite < 3.38 没有可靠的 JSON 谓词，这里 SELECT 出来 Python 侧过滤再 UPDATE，
+    数量级（一天最多十几条 sleep）无所谓。"""
+    rows = conn.execute(
+        "SELECT ts, payload FROM entries "
+        "WHERE type='sleep' AND action='start' AND payload IS NOT NULL"
+    ).fetchall()
+    for r in rows:
+        try:
+            payload = json.loads(r["payload"])
+        except Exception:
+            continue
+        if payload.get("cross_day_wake_ts") != wake_ts:
+            continue
+        payload.pop("cross_day_wake_ts", None)
+        payload.pop("duration_str", None)
+        new_pl = json.dumps(payload, ensure_ascii=False) if payload else None
+        conn.execute("UPDATE entries SET payload=? WHERE ts=?", (new_pl, r["ts"]))
+
+
+def _set_payload_field(
+    conn: sqlite3.Connection, ts: int, key: str, value
+) -> None:
+    """读 → 改 → 写一个 payload 字段，同事务内可见。"""
+    row = conn.execute("SELECT payload FROM entries WHERE ts=?", (ts,)).fetchone()
+    if not row:
+        return
+    payload = json.loads(row["payload"]) if row["payload"] else {}
+    payload[key] = value
+    conn.execute(
+        "UPDATE entries SET payload=? WHERE ts=?",
+        (json.dumps(payload, ensure_ascii=False), ts),
+    )
 
 
 # ── 业务逻辑 ──────────────────────────────────────────────────────────
@@ -173,117 +239,123 @@ def _find_open_sleep_start(entries: list, before_ts: int | None = None) -> dict 
     return cur
 
 
-def _clear_cross_day_wake(data: dict, wake_ts: int) -> None:
-    """Remove cross_day_wake_ts from any sleep-start that points to wake_ts."""
-    for entries in data.values():
-        for e in entries:
-            if e.get("cross_day_wake_ts") == wake_ts:
-                e.pop("cross_day_wake_ts", None)
-                e.pop("duration_str", None)
-
-
 def add_entry(entry: dict) -> dict:
     # 前端可传 date 字段指定目标日期（日期导航切换到过去时使用）
     target_str = entry.pop("date", None) or _today()
     entry.setdefault("time", datetime.now().strftime("%H:%M"))
 
-    data = _load()
-
-    # ts = target date + selected time
+    # ts = target date + selected time，同分钟冲突 +1 错开
     try:
         h, m = map(int, entry["time"].split(":"))
         d = date.fromisoformat(target_str)
         base_ts = int(datetime(d.year, d.month, d.day, h, m).timestamp())
-        existing_ts = {e.get("ts") for e in data.get(target_str, [])}
-        ts = base_ts
-        while ts in existing_ts:
-            ts += 1
-        entry["ts"] = ts
     except Exception:
-        entry["ts"] = int(time.time())
+        base_ts = int(time.time())
 
-    # Auto-compute sleep duration when recording wake-up
-    if entry.get("type") == "sleep" and entry.get("action") == "end":
-        target_d      = date.fromisoformat(target_str)
-        yesterday_str = (target_d - timedelta(days=1)).isoformat()
-        start_entry: dict | None = None
-        start_date:  str  | None = None
-        for dk in (target_str, yesterday_str):
-            found = _find_open_sleep_start(data.get(dk, []), before_ts=entry["ts"])
+    with _db_lock, _connect() as conn:
+        ts = _next_free_ts(conn, base_ts)
+        entry["ts"] = ts
+
+        # Sleep wake-up：找最近一条未闭合的 sleep-start（先今天再昨天），
+        # 算 duration；若来自昨天则在 start 行打 cross_day_wake_ts 标记。
+        if entry.get("type") == "sleep" and entry.get("action") == "end":
+            target_d      = date.fromisoformat(target_str)
+            yesterday_str = (target_d - timedelta(days=1)).isoformat()
+            found = _find_open_sleep_start_db(
+                conn, before_ts=ts, date_pref=(target_str, yesterday_str)
+            )
             if found:
-                start_entry = found
-                start_date  = dk
-                break
-        if start_entry:
-            entry["duration_str"] = _fmt_duration(entry["ts"] - start_entry["ts"])
-            if start_date == yesterday_str:
-                start_entry["cross_day_wake_ts"] = entry["ts"]
+                start_ts, start_date, _ = found
+                entry["duration_str"] = _fmt_duration(ts - start_ts)
+                if start_date == yesterday_str:
+                    _set_payload_field(conn, start_ts, "cross_day_wake_ts", ts)
 
-    data.setdefault(target_str, []).append(entry)
-    data[target_str].sort(key=lambda e: e.get("ts", 0))
-    _save(data)
+        conn.execute(
+            "INSERT INTO entries (ts, date, type, time, action, payload) "
+            "VALUES (?,?,?,?,?,?)",
+            _entry_to_row(entry, target_str),
+        )
+        conn.commit()
+
     log.debug(f"[BabyLog] {entry['type']} @ {target_str} {entry['time']}")
     return entry
 
 
 def delete_entry(ts: int) -> bool:
-    data = _load()
-    for date_key, entries in data.items():
-        for i, e in enumerate(entries):
-            if e.get("ts") == ts:
-                entries.pop(i)
-                # 若删除的是跨日起床记录，清除昨天入睡条目上的 cross_day_wake_ts
-                if e.get("type") == "sleep" and e.get("action") == "end":
-                    _clear_cross_day_wake(data, ts)
-                _save(data)
-                log.debug(f"[BabyLog] deleted ts={ts}")
-                return True
-    return False
+    with _db_lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT type, action FROM entries WHERE ts=?", (ts,)
+        ).fetchone()
+        if not row:
+            return False
+        # 删掉跨日起床记录 → 把昨天 sleep-start 上的 cross_day_wake_ts 清掉
+        if row["type"] == "sleep" and row["action"] == "end":
+            _clear_cross_day_wake_db(conn, ts)
+        conn.execute("DELETE FROM entries WHERE ts=?", (ts,))
+        conn.commit()
+    log.debug(f"[BabyLog] deleted ts={ts}")
+    return True
 
 
 def update_entry(ts: int, updates: dict) -> dict | None:
-    data = _load()
-    for date_key, entries in data.items():
-        for i, e in enumerate(entries):
-            if e.get("ts") == ts:
+    with _db_lock, _connect() as conn:
+        row = conn.execute("SELECT * FROM entries WHERE ts=?", (ts,)).fetchone()
+        if not row:
+            return None
+
+        old_entry = _row_to_entry(row)
+        date_key  = row["date"]
+
+        # 时间编辑 → 重算 ts（排除当前行避免和自己冲突）
+        new_ts = ts
+        if "time" in updates:
+            try:
+                h, m = map(int, updates["time"].split(":"))
+                d = date.fromisoformat(date_key)
+                base_ts = int(datetime(d.year, d.month, d.day, h, m).timestamp())
+                new_ts  = _next_free_ts(conn, base_ts, exclude_ts=ts)
+            except Exception:
                 new_ts = ts
-                if "time" in updates:
-                    try:
-                        h, m = map(int, updates["time"].split(":"))
-                        d = date.fromisoformat(date_key)
-                        base_ts = int(datetime(d.year, d.month, d.day, h, m).timestamp())
-                        other_ts = {e2.get("ts") for j, e2 in enumerate(entries) if j != i}
-                        new_ts = base_ts
-                        while new_ts in other_ts:
-                            new_ts += 1
-                    except Exception:
-                        new_ts = ts
-                entry = {**e, **updates, "ts": new_ts}
-                # Recompute sleep duration if this is a wake-up entry and time changed
-                if entry.get("type") == "sleep" and entry.get("action") == "end" and "time" in updates:
-                    yesterday_str = (date.fromisoformat(date_key) - timedelta(days=1)).isoformat()
-                    # 先清除旧的跨日标记（用旧 ts 定位）
-                    _clear_cross_day_wake(data, ts)
-                    start_entry2: dict | None = None
-                    start_date2:  str  | None = None
-                    for dk in (date_key, yesterday_str):
-                        found = _find_open_sleep_start(data.get(dk, []), before_ts=new_ts)
-                        if found:
-                            start_entry2 = found
-                            start_date2  = dk
-                            break
-                    if start_entry2:
-                        entry["duration_str"] = _fmt_duration(new_ts - start_entry2["ts"])
-                        if start_date2 == yesterday_str:
-                            start_entry2["cross_day_wake_ts"] = new_ts
-                    else:
-                        entry.pop("duration_str", None)
-                entries[i] = entry
-                data[date_key].sort(key=lambda e: e.get("ts", 0))
-                _save(data)
-                log.debug(f"[BabyLog] updated ts={ts}")
-                return entry
-    return None
+
+        new_entry = {**old_entry, **updates, "ts": new_ts}
+
+        # Sleep 起床 + 改了时间 → 重算 duration_str + 重置跨日标记
+        if (new_entry.get("type") == "sleep"
+                and new_entry.get("action") == "end"
+                and "time" in updates):
+            # 用旧 ts 清掉旧的跨日标记
+            _clear_cross_day_wake_db(conn, ts)
+            yesterday_str = (date.fromisoformat(date_key) - timedelta(days=1)).isoformat()
+            found = _find_open_sleep_start_db(
+                conn, before_ts=new_ts, date_pref=(date_key, yesterday_str)
+            )
+            if found:
+                start_ts, start_date, _ = found
+                new_entry["duration_str"] = _fmt_duration(new_ts - start_ts)
+                if start_date == yesterday_str:
+                    _set_payload_field(conn, start_ts, "cross_day_wake_ts", new_ts)
+            else:
+                new_entry.pop("duration_str", None)
+
+        new_row = _entry_to_row(new_entry, date_key)
+        if new_ts != ts:
+            # ts 是 PRIMARY KEY，先 DELETE 再 INSERT
+            conn.execute("DELETE FROM entries WHERE ts=?", (ts,))
+            conn.execute(
+                "INSERT INTO entries (ts, date, type, time, action, payload) "
+                "VALUES (?,?,?,?,?,?)",
+                new_row,
+            )
+        else:
+            conn.execute(
+                "UPDATE entries SET date=?, type=?, time=?, action=?, payload=? "
+                "WHERE ts=?",
+                (new_row[1], new_row[2], new_row[3], new_row[4], new_row[5], ts),
+            )
+        conn.commit()
+
+    log.debug(f"[BabyLog] updated ts={ts}")
+    return new_entry
 
 
 def get_today() -> list:

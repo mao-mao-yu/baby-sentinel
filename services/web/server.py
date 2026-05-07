@@ -150,9 +150,7 @@ async def _lifespan(_: FastAPI):
         asyncio.create_task(gw.run())
 
     yield
-
-    if state.rtsp_proc and state.rtsp_proc.returncode is None:
-        state.rtsp_proc.terminate()
+    # go2rtc 子进程由 manager 拥有；此处无需清理。
 
 
 import os as _os

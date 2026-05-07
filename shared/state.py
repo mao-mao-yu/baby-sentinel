@@ -1,4 +1,3 @@
-import asyncio
 import json
 from typing import Awaitable, Callable, Optional, Set
 
@@ -17,9 +16,8 @@ sensor_state: dict = {
     "last_update": None,
 }
 
-active_ws: Set[WebSocket]                       = set()
-alert_log: list                                 = []
-rtsp_proc: Optional[asyncio.subprocess.Process] = None
+active_ws: Set[WebSocket] = set()
+alert_log: list           = []
 
 # BLE 失联时需要清空的字段（保留 ble_ok / cam_ok 由调用方单独管理）
 _BLE_DATA_FIELDS = (
