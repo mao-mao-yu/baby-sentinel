@@ -215,7 +215,7 @@ export function ServiceCard({ svc, state }: Props) {
              stickToBottom.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
            }}
            className="h-44 overflow-y-auto bg-zinc-950/60 font-mono text-[11px] leading-snug">
-        <div className="px-3 py-2">
+        <div className="p-3">
           {state.logs.length === 0
             ? <span className="text-muted-foreground">— no output —</span>
             : state.logs.map((line, i) => (
