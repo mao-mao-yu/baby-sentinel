@@ -46,12 +46,18 @@ export function ServiceCard({ svc, state }: Props) {
   // 日志区 auto-scroll：用户在底部 → 新行自动跟随；用户主动滚上去看历史
   // → 暂停自动滚动直到他重新滚回底部。stickToBottom 用 ref 不用 state，
   // 不参与 React 渲染。
-  const logRef = useRef<HTMLDivElement>(null);
+  //
+  // 用底部 sentinel + scrollIntoView({block:"end"}) 而不是 scrollTop=scrollHeight：
+  //   - 依赖 state.logs 引用（不是 .length）—— 后端 deque maxlen=400，满了之后
+  //     长度恒定但内容仍在更新，靠 length 当依赖会漏触发
+  //   - scrollIntoView 由浏览器决定确切位置，规避 useEffect 时机偶发 layout
+  //     不一致导致差半行像素的问题
+  const logRef       = useRef<HTMLDivElement>(null);
+  const logEndRef    = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   useEffect(() => {
-    const el = logRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [state.logs.length]);
+    if (stickToBottom.current) logEndRef.current?.scrollIntoView({ block: "end" });
+  }, [state.logs]);
 
   // Mutations: optimistic refetch on settle
   const startMu   = useMutation({ mutationFn: () => api.start(svc),   onSettled: refetch });
@@ -215,6 +221,7 @@ export function ServiceCard({ svc, state }: Props) {
             : state.logs.map((line, i) => (
                 <div key={i} className="whitespace-pre-wrap text-zinc-300">{line}</div>
               ))}
+          <div ref={logEndRef} />
         </div>
       </div>
 

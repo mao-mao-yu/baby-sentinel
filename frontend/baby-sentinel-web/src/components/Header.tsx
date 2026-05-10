@@ -44,9 +44,9 @@ export function Header() {
           <span className="hidden font-mono text-xs text-muted-foreground sm:inline">
             {clock}
           </span>
-          {/* md+ 才显示——手机端 MobileTabs 里有"📼 回放" tab，这里再放就重复 */}
+          {/* 回放按钮：手机 + 桌面都显示。手机端 MobileTabs 已收回为 2-tab。 */}
           <a href="/playback"
-             className="hidden rounded-md border border-border/60 px-2.5 py-1 text-xs hover:bg-accent md:inline-block">
+             className="inline-flex items-center rounded-md border border-border/60 px-2.5 py-1 text-xs hover:bg-accent">
             {T.pbTitle}
           </a>
           {/* 日 / 夜模式切换——日间显月亮（点了变夜），夜间显太阳（点了变日） */}
