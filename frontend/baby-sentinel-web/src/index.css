@@ -1,0 +1,105 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* Light theme（默认）— 浅灰底 + 白卡，整体压暗 + 加大对比度：
+   bg=0.92（更深），card=1.00（白），fg/muted-fg 也压一档让文字更"咬"出来 */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.92 0 0);
+  --foreground: oklch(0.14 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.14 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.14 0 0);
+  --primary: oklch(0.18 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.87 0 0);
+  --secondary-foreground: oklch(0.18 0 0);
+  --muted: oklch(0.87 0 0);
+  --muted-foreground: oklch(0.38 0 0);
+  --accent: oklch(0.87 0 0);
+  --accent-foreground: oklch(0.18 0 0);
+  --destructive: oklch(0.5 0.24 27);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.5 0.18 145);
+  --warning: oklch(0.6 0.16 75);
+  --border: oklch(0 0 0 / 18%);
+  --input: oklch(0 0 0 / 20%);
+  --ring: oklch(0.55 0 0);
+}
+
+/* Dark theme — class .dark 加在 <html> 上时生效 */
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.74 0.18 145);
+  --warning: oklch(0.78 0.16 75);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 18%);
+  --ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html, body {
+    /* 全局禁掉 page-level rubber-band：iOS Safari 拽到边缘时不再回弹整个视口。
+       内部 overflow-y-auto 元素若拽到边缘还会有自己的小弹（这是 UX 友好的，
+       表示"到头了"），但不会传播到 page level 把整个 UI 上抬再回弹。 */
+    overscroll-behavior: none;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Meiryo",
+      "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+}
+
+@layer utilities {
+  /* 隐藏滚动条但保留滚动能力。用于横向滚动的按钮行——手机滑动自然，桌面无视觉噪音。 */
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+}

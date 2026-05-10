@@ -1,0 +1,248 @@
+// 单一 lang 信源 = manager 的 /api/manager/config（vite proxy 转到 :9091）。
+// App 顶层 fetch 一次注入 LangProvider；下游组件用 useT() / useLang()。
+// 改语言后 manager 那边 invalidate 自己 query；这里需要用户刷新或写个 polling，先不上。
+
+import { createContext, useContext, type ReactNode } from "react";
+
+export type Lang = "ja" | "zh";
+
+// posture enum (sense-u-ble v2+) → 显示文本。supine/prone/left_side/right_side/sitting
+type PostureLabels = {
+  supine: string; prone: string; left_side: string; right_side: string; sitting: string;
+};
+
+export const LANGS = {
+  zh: {
+    title:           "BabySentinel",
+    bleOff:          "传感器",
+    bleOn:           "传感器",
+    svrOff:          "服务器断开",
+    camOff:          "摄像头",
+    camOn:           "摄像头",
+    pbTitle:         "📹 回放",
+    mobTabMonitor:   "📹 监控",
+    mobTabBaby:      "🍼 育儿",
+    mobTabPlayback:  "📼 回放",
+    // ── 摄像头 ──
+    camWaiting:      "等待摄像头连接...",
+    camHint:         "请在 manager 设置中填写 tapo_rtsp",
+    offline:         "离线",
+    live:            "● LIVE",
+    muteOn:          "点击取消静音",
+    muteOff:         "点击静音",
+    // ── 传感器卡片 ──
+    connOn:          "已连接",
+    connOff:         "未连接",
+    worn:            "已佩戴",
+    notWorn:         "未佩戴",
+    charging:        "充电中",
+    battFull:        "电量充足",
+    labelBreath:     "💨 呼吸频率",
+    unitBpm:         "次/min",
+    labelTemp:       "🌡️ 衣内温度",
+    labelPosture:    "🛏️ 宝宝姿势",
+    waiting:         "等待数据...",
+    postureLoading:  "数据获取中...",
+    normal:          "正常",
+    slow:            "⚠ 过慢",
+    fast:            "⚠ 过快",
+    updated:         "更新",
+    postures: {
+      supine: "仰卧", prone: "俯卧",
+      left_side: "左侧卧", right_side: "右侧卧",
+      sitting: "坐姿",
+    } as PostureLabels,
+    // ── 育儿日志 ──
+    labelBabyLog:    "育儿日志",
+    labelNextFeed:   "🍼 下次喂奶",
+    nextFeedLabel:   "下次喂奶",
+    feedNone:        "暂无记录",
+    feedRecMl:       "推荐",
+    lastFeed:        "上次",
+    cdRemain:        "还有",
+    cdOverdue:       "已超过",
+    cdHour: "小时", cdMin: "分", cdSec: "秒",
+    statTimes: "次",
+    tabFeed: "🍼 喂奶", tabDaily: "😴 日常", tabHealth: "🌡️ 健康", tabOther: "✨ 其他",
+    btnFormula: "🍼 配方奶", btnBreast: "🤱 母乳", btnBottle: "🍶 母乳瓶喂",
+    btnSleep: "😴 入睡", btnWake: "☀️ 醒来", btnWet: "💧 尿尿", btnDirty: "💩 便便",
+    btnTemp: "🌡️ 体温", btnHeight: "📏 身高", btnWeight: "⚖️ 体重",
+    btnBath: "🛁 洗澡", btnPump: "🍼 挤奶",
+    selectFormula:  "配方奶量 (mL)",
+    selectBottle:   "母乳量 (mL)",
+    selectPump:     "挤奶量 (mL)",
+    selectBreast:   "母乳记录",
+    poopTitle:      "便便详情",
+    poopAmt:        "量",
+    poopAmtTiny: "一点点", poopAmtSmall: "少", poopAmtNormal: "通常", poopAmtLarge: "大",
+    poopCons:       "硬度",
+    poopConsLoose: "泻", poopConsSoft: "软", poopConsNormal: "通常", poopConsHard: "硬",
+    poopColor:      "颜色",
+    tempTitle:      "体温 (°C)",
+    heightTitle:    "身高 (cm)",
+    weightTitle:    "体重 (g)",
+    cancel:         "取消",
+    confirm:        "确认",
+    editTitle:      "修改",
+    editSave:       "保存修改",
+    editDelete:     "🗑️ 删除记录",
+    editConfirmDelete: "确认删除这条记录？",
+    sideLeft: "左", sideRight: "右", sideBoth: "双侧",
+    entryFormula: "配方奶", entryBottle: "瓶喂母乳", entryBreast: "母乳",
+    entrySleep: "入睡", entryWake: "醒来",
+    entryWet: "尿尿", entryPoop: "便便",
+    entryTemp: "体温", entryHeight: "身高", entryWeight: "体重",
+    entryBath: "洗澡", entryPump: "挤奶",
+    poopColors: {
+      white: "白", yellow: "黄", orange: "橙", brown: "茶",
+      green: "绿", red: "红", black: "黑",
+    } as Record<string, string>,
+    pickerTime:      "时间",
+    labelBattery:    "🔋 电量",
+    // ── 录像回放 ── (pbTitle 已在 header 段定义，这里不重复)
+    pbBack:          "返回",
+    pbSelectDatePrompt: "请选择日期",
+    pbSelectSegment: "请选择片段",
+    pbVidTime:       "🎬 视频时刻",
+    pbTimelineLabel: "📍 时间轴（点击跳转）",
+    pbQjFirst:       "⏮ 最早",
+    pbQjLast:        "最新 ⏭",
+    pbQjPrev:        "⬅ 上段",
+    pbQjNext:        "下段 ➡",
+    pbCounterSegs:   "段",
+    pbCounterEvts:   "事件",
+    pbNoSegments:    "该日没有录像",
+    pbLoadFail:      "加载失败",
+    pbUnitMin:       "分",
+    pbNoSensorAtTime:"该时刻附近 30 秒内无传感器记录",
+    // ── 告警弹窗 ──
+    alertDlgTitle:   "🚨 设备告警",
+    alertDlgClose:   "关闭",
+    alertDlgSending: "发送中...",
+  },
+  ja: {
+    title:           "BabySentinel",
+    bleOff:          "センサー",
+    bleOn:           "センサー",
+    svrOff:          "サーバー切断",
+    camOff:          "カメラ",
+    camOn:           "カメラ",
+    pbTitle:         "📹 再生",
+    mobTabMonitor:   "📹 モニター",
+    mobTabBaby:      "🍼 育児",
+    mobTabPlayback:  "📼 再生",
+    camWaiting:      "カメラ接続待機中...",
+    camHint:         "manager で tapo_rtsp を設定してください",
+    offline:         "オフライン",
+    live:            "● LIVE",
+    muteOn:          "タップしてミュート解除",
+    muteOff:         "タップしてミュート",
+    connOn:          "接続中",
+    connOff:         "未接続",
+    worn:            "装着中",
+    notWorn:         "未装着",
+    charging:        "充電中",
+    battFull:        "満充電",
+    labelBreath:     "💨 呼吸数",
+    unitBpm:         "回/min",
+    labelTemp:       "🌡️ 衣内温度",
+    labelPosture:    "🛏️ 寝姿勢",
+    waiting:         "データ待機中...",
+    postureLoading:  "データ取得中...",
+    normal:          "正常",
+    slow:            "⚠ 遅すぎ",
+    fast:            "⚠ 速すぎ",
+    updated:         "更新",
+    postures: {
+      supine: "あおむけ", prone: "うつ伏せ",
+      left_side: "左向き", right_side: "右向き",
+      sitting: "お座り",
+    } as PostureLabels,
+    labelBabyLog:    "育児記録",
+    labelNextFeed:   "🍼 次の授乳",
+    nextFeedLabel:   "次の授乳",
+    feedNone:        "記録なし",
+    feedRecMl:       "推奨",
+    lastFeed:        "前回",
+    cdRemain:        "あと",
+    cdOverdue:       "超過",
+    cdHour: "時間", cdMin: "分", cdSec: "秒",
+    statTimes: "回",
+    tabFeed: "🍼 授乳", tabDaily: "😴 日常", tabHealth: "🌡️ 健康", tabOther: "✨ その他",
+    btnFormula: "🍼 粉ミルク", btnBreast: "🤱 母乳", btnBottle: "🍶 母乳（瓶）",
+    btnSleep: "😴 就寝", btnWake: "☀️ 起床", btnWet: "💧 おしっこ", btnDirty: "💩 うんち",
+    btnTemp: "🌡️ 体温", btnHeight: "📏 身長", btnWeight: "⚖️ 体重",
+    btnBath: "🛁 お風呂", btnPump: "🍼 搾乳",
+    selectFormula:  "粉ミルク量 (mL)",
+    selectBottle:   "母乳量 (mL)",
+    selectPump:     "搾乳量 (mL)",
+    selectBreast:   "母乳の記録",
+    poopTitle:      "うんちの記録",
+    poopAmt:        "量",
+    poopAmtTiny: "ちょこっと", poopAmtSmall: "少なめ", poopAmtNormal: "ふつう", poopAmtLarge: "多め",
+    poopCons:       "硬さ",
+    poopConsLoose: "下痢", poopConsSoft: "やわらかめ", poopConsNormal: "ふつう", poopConsHard: "かため",
+    poopColor:      "色",
+    tempTitle:      "体温 (°C)",
+    heightTitle:    "身長 (cm)",
+    weightTitle:    "体重 (g)",
+    cancel:         "キャンセル",
+    confirm:        "記録する",
+    editTitle:      "編集",
+    editSave:       "保存",
+    editDelete:     "🗑️ 削除する",
+    editConfirmDelete: "この記録を削除しますか？",
+    sideLeft: "左", sideRight: "右", sideBoth: "両側",
+    entryFormula: "粉ミルク", entryBottle: "母乳（哺乳瓶）", entryBreast: "母乳",
+    entrySleep: "就寝", entryWake: "起床",
+    entryWet: "おしっこ", entryPoop: "うんち",
+    entryTemp: "体温", entryHeight: "身長", entryWeight: "体重",
+    entryBath: "お風呂", entryPump: "搾乳",
+    poopColors: {
+      white: "白", yellow: "黄", orange: "橙", brown: "茶",
+      green: "緑", red: "赤", black: "黒",
+    } as Record<string, string>,
+    pickerTime:      "時間",
+    labelBattery:    "🔋 バッテリー",
+    pbBack:          "戻る",
+    pbSelectDatePrompt: "日付を選択してください",
+    pbSelectSegment: "片段を選択してください",
+    pbVidTime:       "🎬 映像時刻",
+    pbTimelineLabel: "📍 タイムライン（クリックでジャンプ）",
+    pbQjFirst:       "⏮ 最初",
+    pbQjLast:        "最新 ⏭",
+    pbQjPrev:        "⬅ 前へ",
+    pbQjNext:        "次へ ➡",
+    pbCounterSegs:   "個",
+    pbCounterEvts:   "件",
+    pbNoSegments:    "この日の録画はありません",
+    pbLoadFail:      "データの読み込みに失敗しました",
+    pbUnitMin:       "分",
+    pbNoSensorAtTime:"この時刻の前後 30 秒以内にセンサー記録なし",
+    alertDlgTitle:   "🚨 デバイスアラート",
+    alertDlgClose:   "閉じる",
+    alertDlgSending: "送信中...",
+  },
+  // 不加 as const：让两种语言的 dict 类型可统一为 Record<key, string>，
+  // 否则 useT() 返回 zh|ja 两个 literal-narrow union，调用 fmtEntry(T) 时会
+  // 报 "传感器" 不可赋值给 "センサー" 这种字面量冲突。
+} satisfies Record<Lang, Record<string, unknown>>;
+
+const initialLang: Lang = navigator.language.startsWith("ja") ? "ja" : "zh";
+const LangContext = createContext<Lang>(initialLang);
+
+export function LangProvider({ lang, children }: { lang: Lang; children: ReactNode }) {
+  return <LangContext.Provider value={lang}>{children}</LangContext.Provider>;
+}
+
+export function useLang(): Lang {
+  return useContext(LangContext);
+}
+
+export function useT() {
+  return LANGS[useLang()];
+}
+
+export function asLang(v: unknown, fallback: Lang = initialLang): Lang {
+  return v === "ja" || v === "zh" ? v : fallback;
+}

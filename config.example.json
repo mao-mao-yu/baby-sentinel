@@ -28,5 +28,10 @@
   "discord_user_ids": [],
   "bark_server_url": "https://api.day.app",
   "bark_keys": [],
-  "alert_notify_enabled": true
+  "alert_notify_enabled": true,
+  "sensor_thresholds": {
+    "breath":  { "min": 10, "max": 60 },
+    "temp":    { "min": 34, "max": 38 },
+    "battery": { "low": 20, "warn": 40, "ok": 60 }
+  }
 }
