@@ -17,7 +17,9 @@ import logging
 import os
 from pathlib import Path
 
-BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# shared/config.py 移到了 backend/shared/config.py，所以爬 3 层 dirname 才回到
+# 项目根（config.json / logs/ / recordings/ 都在根）：file → shared → backend → root
+BASE_DIR     = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_FILE  = os.path.join(BASE_DIR, "config.json")
 EXAMPLE_FILE = os.path.join(BASE_DIR, "config.example.json")
 CODE_FILE    = os.path.join(BASE_DIR, "baby_code.json")

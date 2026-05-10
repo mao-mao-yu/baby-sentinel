@@ -3,9 +3,9 @@
 LLM toolcall 调试 CLI — 跳过 STT/TTS，直接发文本给 voice_service 看 LLM 怎么调工具。
 
 用法:
-    python tools/test_llm.py "配方奶 90 毫升"
-    python tools/test_llm.py --lang ja "粉ミルク 90 ml"
-    python tools/test_llm.py --url http://localhost:8001 "今日喂了几次"
+    python scripts/test_llm.py "配方奶 90 毫升"
+    python scripts/test_llm.py --lang ja "粉ミルク 90 ml"
+    python scripts/test_llm.py --url http://localhost:8001 "今日喂了几次"
 
 工具会真实执行（写入 baby_log）。说"撤销"或在 web UI 里删除可回滚。
 LLM 的 tool_calls 详情看 manager UI 里 voice service 的日志面板。

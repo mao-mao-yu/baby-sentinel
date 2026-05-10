@@ -2,7 +2,7 @@
 Voice Service — FastAPI microservice running on the server.
 
 Pi 上的语音客户端已退役（commit 77265ed）；当前消费方主要是 Discord /log
-和 tools/test_llm.py，外加未来如果有自定义客户端 POST /voice/process。
+和 scripts/test_llm.py，外加未来如果有自定义客户端 POST /voice/process。
 
 Usage:
     python voice/voice_service.py

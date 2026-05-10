@@ -13,6 +13,13 @@ recordings/
 logs/
 docs/
 
+# ── 前端构建产物 ──────────────────────────────────────────────────────
+# Vite 输出 / npm 依赖，每次 build 重新生成；不入库
+backend/services/web/static/web-dist/
+backend/services/web/static/manager-dist/
+frontend/*/node_modules/
+frontend/*/dist/
+
 # ── Python ────────────────────────────────────────────────────────────
 __pycache__/
 **/__pycache__/
@@ -41,8 +48,3 @@ Thumbs.db
 
 wakeword_training/
 
-# ── Voice ─────────────────────────────────────────────────────────────
-# Auto-generated beep sounds
-agent/sounds/
-# Pi-side .env if any
-agent/.env

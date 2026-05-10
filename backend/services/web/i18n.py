@@ -86,11 +86,26 @@ _TR: dict[str, dict] = {
         "log_field_height":   "センチ / cm",
         "log_field_time":     "時刻 HH:MM (空=今)",
 
-        # 姿势 enum 中文 → 显示语言
+        # 姿势 enum (sense-u-ble v2 起统一英文) → 显示语言
         "postures": {
-            "仰卧": "仰向け", "俯卧": "うつ伏せ",
-            "左侧卧": "左向き", "右侧卧": "右向き",
-            "坐姿": "お座り",
+            "supine":     "仰向け",
+            "prone":      "うつ伏せ",
+            "left_side":  "左向き",
+            "right_side": "右向き",
+            "sitting":    "お座り",
+        },
+
+        # 设备告警 mode 字符串 (sense-u-ble README "Alert modes" 表) → 显示语言
+        "alert_modes": {
+            "prone alert":              "🚨 うつ伏せ警告",
+            "temperature high":         "🌡️ 高温警告",
+            "temperature low":          "❄️ 低温警告",
+            "cooling reminder":         "💨 クールダウンのお知らせ",
+            "breath fast":              "🫁 呼吸過多",
+            "breath weak":              "🫁 呼吸微弱",
+            "prone + breath weak":      "🚨 うつ伏せ + 呼吸微弱",
+            "activity alert":           "⚡ 活動異常",
+            "prone sleep breath weak":  "🚨 うつ伏せ就寝 + 呼吸微弱",
         },
     },
     "zh": {
@@ -164,12 +179,43 @@ _TR: dict[str, dict] = {
         "log_field_time":     "时间 HH:MM (留空=现在)",
 
         "postures": {
-            "仰卧": "仰卧", "俯卧": "俯卧",
-            "左侧卧": "左侧卧", "右侧卧": "右侧卧",
-            "坐姿": "坐姿",
+            "supine":     "仰卧",
+            "prone":      "俯卧",
+            "left_side":  "左侧卧",
+            "right_side": "右侧卧",
+            "sitting":    "坐姿",
+        },
+
+        "alert_modes": {
+            "prone alert":              "🚨 俯卧警告",
+            "temperature high":         "🌡️ 温度过高",
+            "temperature low":          "❄️ 温度过低",
+            "cooling reminder":         "💨 散热提醒",
+            "breath fast":              "🫁 呼吸过快",
+            "breath weak":              "🫁 呼吸微弱",
+            "prone + breath weak":      "🚨 俯卧 + 呼吸微弱",
+            "activity alert":           "⚡ 活动异常",
+            "prone sleep breath weak":  "🚨 俯卧睡眠 + 呼吸微弱",
         },
     },
 }
+
+# sense-u-ble v1 (旧固件 / 旧 sensors_db 历史行) 用中文 enum，v2 起统一英文。
+# 入站时归一化到英文，让后续 i18n 表只维护一套 key。
+_LEGACY_POSTURE_ZH_TO_EN = {
+    "仰卧":   "supine",
+    "俯卧":   "prone",
+    "左侧卧": "left_side",
+    "右侧卧": "right_side",
+    "坐姿":   "sitting",
+}
+
+
+def normalize_posture(value: str | None) -> str | None:
+    """把姿势 enum 归一化到英文 (兼容旧中文历史数据)。"""
+    if not value:
+        return value
+    return _LEGACY_POSTURE_ZH_TO_EN.get(value, value)
 
 
 def _lang() -> str:
@@ -191,11 +237,20 @@ def t(key: str, **kw) -> str:
     return s
 
 
-def posture_label(zh_value: str) -> str:
-    """把 SQLite 里的中文 enum（'仰卧' 等）映射到当前语言。"""
-    if not zh_value:
-        return zh_value
-    return _TR[_lang()]["postures"].get(zh_value, zh_value)
+def posture_label(value: str) -> str:
+    """姿势 enum → 当前语言显示文案。兼容旧中文 enum (legacy sensors_db 行)。"""
+    if not value:
+        return value
+    en = normalize_posture(value)
+    return _TR[_lang()]["postures"].get(en, en)
+
+
+def alert_mode_label(en_message: str) -> str:
+    """sense-u-ble 设备告警的英文 message → 当前语言显示文案。
+    未命中表的字符串原样返回 (以后固件新增 mode 时不致丢消息)。"""
+    if not en_message:
+        return en_message
+    return _TR[_lang()]["alert_modes"].get(en_message, en_message)
 
 
 def entry_type_label(type_code: str) -> str:

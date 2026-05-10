@@ -19,6 +19,12 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
+
+# manager.py 位于项目根，shared/ services/ 都在 backend/ 下面。把 backend 加进
+# sys.path，让 `from shared.X` / `from services.X` 这套 import idiom 跟 services
+# 内部的 sys.path hack 一致——服务子进程那边 parent.parent.parent 也是落到 backend。
+sys.path.insert(0, str(Path(__file__).parent / "backend"))
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -162,28 +168,28 @@ SERVICES: dict[str, dict] = {
         "name":       "BabySentinel Server",
         "icon":       "🍼",
         "desc":       f"Web · 摄像头 · 提醒 · Discord   :{ROOT_CFG.get('web_port', 8080)}",
-        "cmd":        [sys.executable, "-u", "services/web/server.py"],
+        "cmd":        [sys.executable, "-u", "backend/services/web/server.py"],
         "port":       ROOT_CFG.get("web_port", 8080),
     },
     "recorder": {
         "name":       "Recorder",
         "icon":       "⏺",
         "desc":       "视频录制 · 传感器时序存档",
-        "cmd":        [sys.executable, "-u", "services/recorder/service.py"],
+        "cmd":        [sys.executable, "-u", "backend/services/recorder/service.py"],
         "port":       None,
         # adoptable: manager 启动时若已有同名进程在跑就直接接管而不杀，避免录像中断
         "adoptable":  True,
-        "script":     "services/recorder/service.py",
+        "script":     "backend/services/recorder/service.py",
     },
     "voice": {
         "name":       "Voice Service",
         "icon":       "🎙",
         "desc":       f"Whisper STT · LLM · TTS   :{ROOT_CFG.get('voice_service_port', 8001)}",
-        "cmd":        [sys.executable, "-u", "services/voice/voice_service.py"],
+        "cmd":        [sys.executable, "-u", "backend/services/voice/voice_service.py"],
         "port":       ROOT_CFG.get("voice_service_port", 8001),
         # adoptable: manager 重启时不杀 → 避免 Whisper 模型重新加载（large-v3 加载耗时 30s+）
         "adoptable":  True,
-        "script":     "services/voice/voice_service.py",
+        "script":     "backend/services/voice/voice_service.py",
     },
 }
 
@@ -307,7 +313,9 @@ async def _do_start_remote(svc: str):
         return
 
     # Adopt path：本地无 tail + 远端 unit 已 active → 直接搭 tail
-    have_tail = (_procs[svc] is not None and _procs[svc].returncode is None)
+    # 绑本地变量让 Pyright 能在 and 里 narrow 类型（dict 索引两次它会假定值可变）
+    cur_tail = _procs[svc]
+    have_tail = cur_tail is not None and cur_tail.returncode is None
     if not have_tail:
         code, _ = await _ssh_run(remote, f"systemctl --user is-active {unit}", timeout=5)
         if code == 0:
@@ -567,9 +575,13 @@ def _scan_and_kill_orphans() -> None:
         if defn.get("adoptable") and defn.get("script")
     }
 
-    # 包含历史路径 recorder_service.py（重构前），避免老进程漏扫成幽灵
+    # 包含历史路径——pre-backend/ 重排时 spawn 的进程仍以 services/X 开头，
+    # recorder_service.py 是更早的命名。新旧路径都列出，避免漏扫成幽儿。
     _orphan_pattern = (
-        "services/recorder/service.py"
+        "backend/services/recorder/service.py"
+        "|backend/services/web/server.py"
+        "|backend/services/voice/voice_service.py"
+        "|services/recorder/service.py"
         "|services/web/server.py"
         "|services/voice/voice_service.py"
         "|recorder_service\\.py"
@@ -652,19 +664,21 @@ atexit.register(_cleanup_at_exit)
 
 
 app = FastAPI(title="BabySentinel Manager", lifespan=_lifespan)
-app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "services", "web", "static")), name="static")
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "backend", "services", "web", "static")), name="static")
 
 # 静态资源版本号——manager 启动时一次确定，强制浏览器跳过旧 cache
-_CFG_VER = str(int(time.time()))
-
-
 @app.get("/")
 async def index():
-    with open(os.path.join(BASE_DIR, "services", "web", "static", "manager.html"), encoding="utf-8") as f:
-        html = (f.read()
-                .replace("__WEB_PORT__", str(ROOT_CFG.get("web_port", 8080)))
-                .replace("__CFG_VER__", _CFG_VER))
-    return HTMLResponse(html)
+    """直接返回 vite build 产出的 manager React SPA。dist 不存在 → 503 + 提示构建命令。"""
+    v2_path = os.path.join(BASE_DIR, "backend", "services", "web", "static", "manager-dist", "index.html")
+    if not os.path.exists(v2_path):
+        return HTMLResponse(
+            "<h1>manager-dist not built</h1>"
+            "<p>Run <code>npm run build</code> in <code>frontend/manager/</code>.</p>",
+            status_code=503,
+        )
+    with open(v2_path, encoding="utf-8") as f:
+        return HTMLResponse(f.read())
 
 
 @app.get("/api/manager/status")

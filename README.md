@@ -355,7 +355,7 @@ Discord Bot 提供两个 Slash command：
 > 
 > **结论**：当前不推荐 ReSpeaker UAC1.0 走这条链路。如果你想再试，建议换 **带 XMOS VocalFusion DSP 固件的 ReSpeaker（如 USB Mic Array v2.0）**——它的 firmware 会做 NS/AGC 处理，c0 输出已经是降噪后的语音通道。或换其它带本地 DSP 的 USB mic。
 > 
-> 下面整套部署方案保留为**有效参考**，代码（`agent/pi_streamer.sh` + `manager._gen_go2rtc_yaml` 多源逻辑）也都还在；只要 `pi_audio_rtsp` 不为空就会走多源，留空就 fallback 到 Tapo 单源。
+> 下面整套部署方案保留为**有效参考**，代码（`scripts/pi_streamer.sh` + `manager._gen_go2rtc_yaml` 多源逻辑）也都还在；只要 `pi_audio_rtsp` 不为空就会走多源，留空就 fallback 到 Tapo 单源。
 
 如果你在 Pi 上接了 ReSpeaker 等 USB 麦克风（音质比 Tapo 内置麦好得多），可以让监控页同时显示 Tapo 视频 + Pi 麦音频，端到端延迟在 100~200ms。
 
@@ -400,7 +400,7 @@ ReSpeaker → Pi ALSA → ffmpeg(libopus 32k) → mediamtx RTSP → 服务端 go
 
    ```bash
    ~/mediamtx/mediamtx ~/mediamtx/mediamtx.yml
-   bash agent/pi_streamer.sh plughw:1,0
+   bash scripts/pi_streamer.sh plughw:1,0
    ```
 
    或者用 **systemd user 服务**（实测推荐，**无需 sudo**）：
@@ -433,7 +433,7 @@ ReSpeaker → Pi ALSA → ffmpeg(libopus 32k) → mediamtx RTSP → 服务端 go
    [Service]
    Type=simple
    ExecStartPre=/bin/sleep 4
-   ExecStart=/bin/bash %h/BabySentinel/agent/pi_streamer.sh plughw:1,0
+   ExecStart=/bin/bash %h/BabySentinel/scripts/pi_streamer.sh plughw:1,0
    Restart=always
    RestartSec=3
 
@@ -609,7 +609,7 @@ baby-sentinel/
 
 > **Pi 上的语音客户端（唤醒词 / VAD 录音）已退役**（commit `77265ed`）。当前 voice service 主要被以下两路使用，没有外部音频客户端：
 > - **Discord `/log` 命令** —— 自由文本走 LLM 工具调用写育儿日志
-> - **`tools/test_llm.py`** —— 命令行直接 POST 文本，调试 LLM 工具
+> - **`scripts/test_llm.py`** —— 命令行直接 POST 文本，调试 LLM 工具
 >
 > 如果以后重新接入音频客户端（如 ReSpeaker + openwakeword），再 POST `/voice/process` 即可走完整 STT → LLM → TTS 流程。历史唤醒词模型 `hey_momobot.onnx` 仍在 `wakeword_training/`（gitignored）。
 
@@ -738,9 +738,9 @@ pip install faster-whisper
 **调试 LLM tool calling（跳过 STT/TTS）：**
 
 ```bash
-./venv/bin/python tools/test_llm.py "配方奶 90 毫升"
-./venv/bin/python tools/test_llm.py --lang ja "粉ミルク90ml"
-./venv/bin/python tools/test_llm.py --url http://192.168.1.100:8001 "今日喂了几次"
+./venv/bin/python scripts/test_llm.py "配方奶 90 毫升"
+./venv/bin/python scripts/test_llm.py --lang ja "粉ミルク90ml"
+./venv/bin/python scripts/test_llm.py --url http://192.168.1.100:8001 "今日喂了几次"
 ```
 
 直接对 voice_service 的 `/voice/test_llm` 发文本，看 LLM 怎么调工具、回了什么。**真实落库**，回滚靠"撤销"或在 web UI 删除。
@@ -798,7 +798,7 @@ LLM 配置了以下工具，说中文或日语均可触发：
 - 检查 `services/voice/config.json` 中对应 provider 的 `*_api_key` 是否正确
 - MiniMax `base_url`：国内用 `https://api.minimaxi.com/v1`，国际用 `https://api.minimax.io`
 - 配额耗尽时可切 provider：`"llm_provider": "deepseek"`（或反过来）；TTS 切 `"tts_provider": "edge"` 用免费微软 TTS
-- 用 `tools/test_llm.py "配方奶 90 毫升"` 直接打 LLM，比走 STT 链路更快定位是 LLM 还是 Whisper 的问题
+- 用 `scripts/test_llm.py "配方奶 90 毫升"` 直接打 LLM，比走 STT 链路更快定位是 LLM 还是 Whisper 的问题
 
 ---
 
@@ -813,7 +813,7 @@ LLM 配置了以下工具，说中文或日语均可触发：
 - ✅ 配置分服务管理：每个 service 自己的 `config.json`，根 config 只放跨服务字段
 - ✅ Discord Slash command：`/get_sensor_status_now` + `/get_status_today`
 - ✅ 白噪音保活：解决 BT/USB 喇叭省电模式导致的 TTS 首字丢失
-- ✅ `tools/test_llm.py` —— 跳过 STT/TTS 直调 LLM 的调试 CLI
+- ✅ `scripts/test_llm.py` —— 跳过 STT/TTS 直调 LLM 的调试 CLI
 
 **待做：**
 - Pi 兼任 BLE 中继：Sense-U 从主机蓝牙移到 Pi，主机蓝牙腾出来

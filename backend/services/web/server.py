@@ -16,17 +16,17 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared.config import BASE_DIR, REC_DIR, log
-from shared.state import active_ws, sensor_state
-import shared.state as state
-import shared.camera as camera
+from services.web.state import active_ws, sensor_state
+import services.web.state as state
+import services.web.camera as camera
 import services.web.baby_log as baby_log
 import shared.sensors_db as sensors_db
 from shared.video_util import is_complete_mp4
-from shared.alerts import trigger_alert
-from shared.i18n import t
-from shared.notify.discord_bot import GatewayClient
+from services.web.alerts import trigger_alert
+from services.web.i18n import t, alert_mode_label
+from services.web.notify.discord_bot import GatewayClient
 from services.web.config import (
-    WEB_HOST, WEB_PORT, MANAGER_PORT,
+    WEB_HOST, WEB_PORT,
     FEED_REPEAT_S, BLE_HEALTH_TIMEOUT_S, BLE_POLL_INTERVAL_S,
     SEGMENT_S, BABY, DISCORD_TOKEN,
 )
@@ -79,13 +79,12 @@ async def _feed_reminder_loop():
             interval_min   = int(BABY.get("feed_interval_min", 150))
             feed_threshold = interval_min * 60
 
-            entries  = baby_log.get_today()
-            feeds    = [e for e in entries if e.get("type") in baby_log.FEED_TYPES]
-            if not feeds:
+            last = baby_log.get_last_feed()
+            if not last:
                 _reminder_feed_ts = _last_reminder_time = 0
                 continue
 
-            last_ts   = feeds[-1]["ts"]
+            last_ts   = last["ts"]
             now       = time.time()
             elapsed_s = now - last_ts
 
@@ -164,9 +163,6 @@ app = FastAPI(lifespan=_lifespan, title="BabySentinel")
 app.mount("/static",      StaticFiles(directory=_STATIC_DIR), name="static")
 app.mount("/recordings",  StaticFiles(directory=REC_DIR),                           name="recordings")
 
-# 静态资源版本号——server 启动时一次确定，强制浏览器跳过旧 cache
-_CFG_VER = str(int(time.time()))
-
 
 @app.websocket("/ws")
 async def ws_handler(websocket: WebSocket):
@@ -192,11 +188,16 @@ async def ws_handler(websocket: WebSocket):
 
 @app.get("/")
 async def root():
-    with open(_os.path.join(_STATIC_DIR, "index.html"), encoding="utf-8") as f:
-        html = (f.read()
-                .replace("__MANAGER_PORT__", str(MANAGER_PORT))
-                .replace("__CFG_VER__", _CFG_VER))
-    return HTMLResponse(html)
+    """直接返回 vite build 产出的 React SPA。dist 不存在 → 503 + 提示构建命令。"""
+    v2_path = _os.path.join(_STATIC_DIR, "web-dist", "index.html")
+    if not _os.path.exists(v2_path):
+        return HTMLResponse(
+            "<h1>web-dist not built</h1>"
+            "<p>Run <code>npm run build</code> in <code>frontend/baby-sentinel-web/</code>.</p>",
+            status_code=503,
+        )
+    with open(v2_path, encoding="utf-8") as f:
+        return HTMLResponse(f.read())
 
 
 @app.post("/api/log")
@@ -282,7 +283,10 @@ async def internal_sensor_push(request: Request):
     elif data.get("type") == "alert":
         # Pi 端 sense-u-ble 不接通知渠道，由本服务端统一收口
         global _alert_event, _alert_data
-        msg   = data.get("message", "")
+        raw_msg = data.get("message", "")
+        # sense-u-ble 推送的是固定英文 enum (见其 README "Alert modes" 表)；
+        # 这里在出口处统一翻成 ROOT_CFG.language，BARK / Discord / WS / 弹窗一份消息走全程。
+        msg   = alert_mode_label(raw_msg)
         level = data.get("level", "warning")
         mode  = data.get("mode")          # 设备原始 alertMode（int），sense-u-ble v2 起带这个字段
         ts    = data.get("timestamp")
@@ -396,8 +400,16 @@ async def post_sensor_refresh():
 
 @app.get("/playback")
 async def playback_page():
-    with open(_os.path.join(_STATIC_DIR, "playback.html"), encoding="utf-8") as f:
-        return HTMLResponse(f.read().replace("__CFG_VER__", _CFG_VER))
+    """跟主页同 entry——返回 SPA index.html，前端按 location.pathname 自己进 PlaybackPage。"""
+    v2_path = _os.path.join(_STATIC_DIR, "web-dist", "index.html")
+    if not _os.path.exists(v2_path):
+        return HTMLResponse(
+            "<h1>web-dist not built</h1>"
+            "<p>Run <code>npm run build</code> in <code>frontend/baby-sentinel-web/</code>.</p>",
+            status_code=503,
+        )
+    with open(v2_path, encoding="utf-8") as f:
+        return HTMLResponse(f.read())
 
 
 @app.get("/api/config/public")
@@ -428,23 +440,33 @@ async def get_recording_segments(date: str):
         return JSONResponse([])
     from datetime import datetime as _dt
 
-    # Load PTS-based timestamps from index.csv if available (written by ffmpeg -segment_list).
-    # CSV format: filename,start_pts_time,end_pts_time  — values are Unix timestamps from TAPO camera.
-    pts_map: dict[str, float] = {}
+    # Load PTS pairs from index.csv if available (written by ffmpeg -segment_list).
+    # CSV format: filename, start_pts_time, end_pts_time
+    # 数值有两种语义（看具体 ffmpeg 拿到的时间源）：
+    #   1) **绝对 unix 时间戳**（>EPOCH_2001）— Tapo 通过 SEI 给了真实时钟，少见
+    #   2) **相对秒数**（从流首段累计的 PTS 偏移）— 当前数据走这条；start ~ 0/362/...
+    # 解析时不预先按阈值过滤；下面 per-file 再按 (start>EPOCH) 判断走哪条路径。
+    pts_pairs: dict[str, tuple[float, float | None]] = {}
     idx_path = _os.path.join(vid_dir, "index.csv")
-    _EPOCH_2001 = 978307200  # sanity floor: any ts > this is a real Unix timestamp
+    _EPOCH_2001 = 978307200  # 任何 ts > 这个值视为真实 unix 时间戳
     if _os.path.exists(idx_path):
         try:
             with open(idx_path, newline="", encoding="utf-8") as fh:
                 for row in _csv.reader(fh):
-                    if len(row) >= 2:
-                        fname = _os.path.basename(row[0])
+                    if len(row) < 2:
+                        continue
+                    fname = _os.path.basename(row[0])
+                    try:
+                        start = float(row[1])
+                    except ValueError:
+                        continue
+                    end: float | None = None
+                    if len(row) >= 3:
                         try:
-                            pts = float(row[1])
-                            if pts > _EPOCH_2001:
-                                pts_map[fname] = pts
+                            end = float(row[2])
                         except ValueError:
                             pass
+                    pts_pairs[fname] = (start, end)
         except Exception:
             pass
 
@@ -470,17 +492,29 @@ async def get_recording_segments(date: str):
         # 残缺/截断的 mp4（缺 moov atom）不展示在 timeline，浏览器点了也播不了
         if not is_complete_mp4(full):
             continue
-        if f in pts_map:
-            # 保留浮点 sub-second 精度：ffmpeg 写的 start_pts_time 通常带几位小数，
-            # 截成 int 会让回放时间轴比 Tapo OSD 慢/快 0–999ms。
-            ts = float(pts_map[f])
+        # ts / end_ts 推导（两种 PTS 语义按 start 阈值分流）：
+        end_ts: float | None = None
+        pair = pts_pairs.get(f)
+        if pair and pair[0] > _EPOCH_2001:
+            # 绝对 unix 时间戳：直接用，sub-second 保留
+            ts = float(pair[0])
+            if pair[1] is not None and pair[1] > _EPOCH_2001:
+                end_ts = float(pair[1])
         else:
+            # 相对秒数 / 完全没 index.csv：ts 从文件名解析；有 pair 则按时长推导 end_ts
             try:
                 t = _dt.strptime(f"{date} {f[:-4]}", "%Y-%m-%d %H-%M-%S")
                 ts = float(t.timestamp())
             except ValueError:
                 continue
-        segments.append({"file": f, "ts": ts, "url": f"/recordings/{date}/video/{f}"})
+            if pair and pair[1] is not None:
+                duration = pair[1] - pair[0]
+                if duration > 0:
+                    end_ts = ts + duration
+        item: dict = {"file": f, "ts": ts, "url": f"/recordings/{date}/video/{f}"}
+        if end_ts is not None:
+            item["end_ts"] = end_ts
+        segments.append(item)
     return JSONResponse(segments)
 
 

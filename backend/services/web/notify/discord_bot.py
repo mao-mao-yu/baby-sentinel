@@ -9,9 +9,9 @@ from typing import Any, Awaitable, Callable
 
 import websockets
 
-from shared.notify._http import request_async as _http
+from services.web.notify._http import request_async as _http
 
-from shared.i18n import t, posture_label, entry_type_label, diaper_kind_label
+from services.web.i18n import t, posture_label, entry_type_label, diaper_kind_label
 
 log = logging.getLogger("BabySentinel")
 

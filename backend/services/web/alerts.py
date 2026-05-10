@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime
 
 from shared.config import ALERT_MAX_LOG, ROOT_CFG, log
-from shared.state import alert_log, broadcast
+from services.web.state import alert_log, broadcast
 
 
 async def notify_qq(message: str) -> None:
@@ -11,7 +11,7 @@ async def notify_qq(message: str) -> None:
 
 
 async def notify_discord(message: str, level: str = "warning") -> None:
-    from shared.notify.discord_send import send_alert
+    from services.web.notify.discord_send import send_alert
     token       = ROOT_CFG.get("discord_token", "")
     channel_ids = ROOT_CFG.get("discord_channel_ids", [])
     user_ids    = ROOT_CFG.get("discord_user_ids", [])
@@ -24,7 +24,7 @@ async def notify_discord(message: str, level: str = "warning") -> None:
 
 
 async def notify_bark(message: str, level: str = "warning") -> None:
-    from shared.notify.bark_send import send_bark
+    from services.web.notify.bark_send import send_bark
     keys   = ROOT_CFG.get("bark_keys", [])
     server = ROOT_CFG.get("bark_server_url", "https://api.day.app")
     if not keys:

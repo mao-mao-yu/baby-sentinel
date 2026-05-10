@@ -2,7 +2,7 @@
 
 import logging
 
-from shared.notify._http import request
+from services.web.notify._http import request
 
 log = logging.getLogger("BabySentinel")
 

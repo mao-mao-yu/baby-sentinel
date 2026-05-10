@@ -215,7 +215,7 @@ def _parse_birth_date(s: str):
 
 
 def _fmt_duration(seconds: int) -> str:
-    from shared.i18n import t
+    from services.web.i18n import t
     h, m = divmod(abs(seconds), 3600)
     m = m // 60
     return t("duration_h_m", h=h, m=m) if h else t("duration_m", m=m)
@@ -360,6 +360,17 @@ def update_entry(ts: int, updates: dict) -> dict | None:
 
 def get_today() -> list:
     return get_date_entries(_today())
+
+
+def get_last_feed() -> dict | None:
+    """最近一次喂奶条目：今天没有则回退到昨天，用于跨午夜倒计时/提醒。"""
+    today_str     = _today()
+    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+    for d in (today_str, yesterday_str):
+        feeds = [e for e in get_date_entries(d) if e.get("type") in FEED_TYPES]
+        if feeds:
+            return feeds[-1]
+    return None
 
 
 def _latest_weight_g(data: dict) -> int | None:
