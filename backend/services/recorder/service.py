@@ -164,6 +164,53 @@ async def video_cleanup_loop() -> None:
 
 # ── 摄像头录像 ────────────────────────────────────────────────────────
 
+# 跨日切换时让新老 ffmpeg 重叠的秒数：新进程拉 RTSP + 写首帧大概 1-2s，
+# 给点冗余 3s。重叠期两个进程都在录，零间隔；代价是新一天前几秒帧
+# 同时落在前一天最后一段 + 新一天第一段 mp4，可接受。
+_DAY_ROLLOVER_OVERLAP_S = 3
+
+
+async def _spawn_ffmpeg(ffmpeg: str, src: str, day: date,
+                        ) -> tuple[asyncio.subprocess.Process, asyncio.Task]:
+    """启动一个 ffmpeg 子进程：连续分段写到 `day` 对应的目录 + 该天的 index.csv。
+    返回 (proc, drain_task)。drain_task 持续把 stderr 转成 log.warning。"""
+    day_dir  = _day_dir(day)
+    out_pat  = os.path.join(day_dir, "video", "%H-%M-%S.mp4")
+    idx_path = os.path.join(day_dir, "video", "index.csv")
+    log.info(f"[Camera] 连续分段录制 → {day_dir}/video/")
+
+    proc = await asyncio.create_subprocess_exec(
+        ffmpeg,
+        "-loglevel", "error",
+        "-fflags", "+genpts",
+        "-rtsp_transport", "tcp",
+        "-i", src,
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "32k",
+        "-f", "segment",
+        "-segment_time", str(SEGMENT_S),
+        "-segment_format", "mp4",
+        "-segment_list", idx_path,
+        "-segment_list_type", "csv",
+        "-segment_list_flags", "+cache",
+        "-reset_timestamps", "1",   # 每段 PTS 从 0 开始，避免播放器把累积 PTS 当时长
+        "-strftime", "1",
+        out_pat,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def _drain():
+        assert proc.stderr is not None
+        async for raw in proc.stderr:
+            txt = raw.decode(errors="replace").strip()
+            if txt:
+                log.warning(f"[Camera] ffmpeg: {txt}")
+
+    drain_task = asyncio.create_task(_drain())
+    return proc, drain_task
+
+
 async def camera_record_loop() -> None:
     rtsp = TAPO_RTSP
     if "YOUR_PASSWORD" in rtsp:
@@ -186,61 +233,52 @@ async def camera_record_loop() -> None:
 
     await _wait_go2rtc()
 
+    proc:       asyncio.subprocess.Process | None = None
+    drain_task: asyncio.Task | None                = None
+    today:      date | None                        = None
+
     while True:
-        today   = date.today()
-        day_dir = _day_dir(today)
-        out_pat  = os.path.join(day_dir, "video", "%H-%M-%S.mp4")
-        idx_path = os.path.join(day_dir, "video", "index.csv")
-        log.info(f"[Camera] 连续分段录制 → {day_dir}/video/")
-
         try:
-            proc = await asyncio.create_subprocess_exec(
-                ffmpeg,
-                "-loglevel", "error",
-                "-fflags", "+genpts",
-                "-rtsp_transport", "tcp",
-                "-i", src,
-                "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "32k",
-                "-f", "segment",
-                "-segment_time", str(SEGMENT_S),
-                "-segment_format", "mp4",
-                "-segment_list", idx_path,
-                "-segment_list_type", "csv",
-                "-segment_list_flags", "+cache",
-                "-reset_timestamps", "1",   # 每段 PTS 从 0 开始，避免播放器把累积 PTS 当时长
-                "-strftime", "1",
-                out_pat,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            # 第一次启动 / 上一轮崩溃后重新拉起
+            if proc is None:
+                today = date.today()
+                proc, drain_task = await _spawn_ffmpeg(ffmpeg, src, today)
 
-            async def _drain():
-                async for raw in proc.stderr:
-                    txt = raw.decode(errors="replace").strip()
-                    if txt:
-                        log.warning(f"[Camera] ffmpeg: {txt}")
+            # 1s 轮询；尽快发现跨日 + 进程崩溃
+            await asyncio.sleep(1)
 
-            drain_task = asyncio.create_task(_drain())
+            # 进程崩溃 → 等 go2rtc 恢复再起一个新的
+            if proc.returncode is not None:
+                if proc.returncode not in (0, -15):
+                    log.warning(f"[Camera] ffmpeg 退出 code={proc.returncode}")
+                if drain_task: drain_task.cancel()
+                proc = None
+                drain_task = None
+                await _wait_go2rtc()
+                continue
 
-            while proc.returncode is None:
-                await asyncio.sleep(10)
-                if date.today() != today:
-                    log.info("[Camera] 日期变更，重启录像至新目录")
-                    await _terminate_proc(proc, name="Camera")
-                    break
-
-            drain_task.cancel()
-
-            if proc.returncode not in (0, None, -15):
-                log.warning(f"[Camera] ffmpeg 退出 code={proc.returncode}")
+            # 跨日：先 spawn 新进程 → 等 N 秒拿到首帧 → SIGTERM 老进程
+            # 重叠期间两个 ffmpeg 同时拉 go2rtc（go2rtc 支持多 consumer），无间隔。
+            cur_today = date.today()
+            if today is not None and cur_today != today:
+                log.info(f"[Camera] 日期变更 {today} → {cur_today}，无缝切换（overlap {_DAY_ROLLOVER_OVERLAP_S}s）")
+                new_proc, new_drain = await _spawn_ffmpeg(ffmpeg, src, cur_today)
+                # 让新进程把第一段 mp4 写出 moov 的概率更高；老进程此时仍在录今天最后一段
+                await asyncio.sleep(_DAY_ROLLOVER_OVERLAP_S)
+                old_proc, old_drain = proc, drain_task
+                proc, drain_task, today = new_proc, new_drain, cur_today
+                # 老进程优雅终止：SIGTERM 让 ffmpeg 写完当前段的 moov atom
+                await _terminate_proc(old_proc, name="Camera-prev")
+                if old_drain: old_drain.cancel()
 
         except Exception as e:
             log.warning(f"[Camera] 异常: {type(e).__name__}: {e}")
-
-        # go2rtc 可能随主服务重启了，等它恢复
-        await _wait_go2rtc()
-        await asyncio.sleep(1)
+            if proc:
+                await _terminate_proc(proc, name="Camera")
+                if drain_task: drain_task.cancel()
+                proc = None
+                drain_task = None
+            await asyncio.sleep(2)
 
 
 # ── 入口 ─────────────────────────────────────────────────────────────
