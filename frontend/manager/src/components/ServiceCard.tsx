@@ -47,16 +47,15 @@ export function ServiceCard({ svc, state }: Props) {
   // → 暂停自动滚动直到他重新滚回底部。stickToBottom 用 ref 不用 state，
   // 不参与 React 渲染。
   //
-  // 用底部 sentinel + scrollIntoView({block:"end"}) 而不是 scrollTop=scrollHeight：
-  //   - 依赖 state.logs 引用（不是 .length）—— 后端 deque maxlen=400，满了之后
-  //     长度恒定但内容仍在更新，靠 length 当依赖会漏触发
-  //   - scrollIntoView 由浏览器决定确切位置，规避 useEffect 时机偶发 layout
-  //     不一致导致差半行像素的问题
+  // 直接操作 logRef.scrollTop 而非 scrollIntoView：后者默认会顺着 scrollable
+  // 祖先一路滚到根，把外层卡片容器也带跑。这里只想滚日志面板自己。
+  // 依赖项是 state.logs 引用（不是 .length）—— 后端 deque maxlen=400 满了之后
+  // 长度恒定但内容仍在更新，靠 length 当 dep 会漏触发。
   const logRef       = useRef<HTMLDivElement>(null);
-  const logEndRef    = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   useEffect(() => {
-    if (stickToBottom.current) logEndRef.current?.scrollIntoView({ block: "end" });
+    const el = logRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [state.logs]);
 
   // Mutations: optimistic refetch on settle
@@ -221,7 +220,6 @@ export function ServiceCard({ svc, state }: Props) {
             : state.logs.map((line, i) => (
                 <div key={i} className="whitespace-pre-wrap text-zinc-300">{line}</div>
               ))}
-          <div ref={logEndRef} />
         </div>
       </div>
 
