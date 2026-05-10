@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM toolcall 调试 CLI — 跳过 STT/TTS，直接发文本给 voice_service 看 LLM 怎么调工具。
+LLM toolcall 调试 CLI — 跳过 STT/TTS，直接发文本给 voice service 看 LLM 怎么调工具。
 
 用法:
     python scripts/test_llm.py "配方奶 90 毫升"

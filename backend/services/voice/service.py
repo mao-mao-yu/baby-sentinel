@@ -5,8 +5,8 @@ Pi 上的语音客户端已退役（commit 77265ed）；当前消费方主要是
 和 scripts/test_llm.py，外加未来如果有自定义客户端 POST /voice/process。
 
 Usage:
-    python voice/voice_service.py
-    uvicorn voice.voice_service:app --host 0.0.0.0 --port 8001 --reload
+    python backend/services/voice/service.py
+    uvicorn services.voice.service:app --host 0.0.0.0 --port 8001 --reload
 """
 import asyncio
 import logging
@@ -23,7 +23,7 @@ sys.path.insert(0, str(_ROOT))
 
 from services.voice import config as cfg
 from services.voice.stt import STT
-from services.voice.llm_agent import LLMAgent
+from services.voice.llm.agent import LLMAgent
 from services.voice.llm import get_provider as get_llm_provider
 from services.voice.tts import get_provider as get_tts_provider
 
@@ -153,7 +153,7 @@ async def health():
 
 if __name__ == "__main__":
     uvicorn.run(
-        "services.voice.voice_service:app",
+        "services.voice.service:app",
         host="0.0.0.0",
         port=cfg.VOICE_SERVICE_PORT,
         reload=False,

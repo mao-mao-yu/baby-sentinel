@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from shared.config import BASE_DIR, REC_DIR, log
 from services.web.state import active_ws, sensor_state
 import services.web.state as state
-import services.web.camera as camera
+import services.web.go2rtc_monitor as go2rtc_monitor
 import services.web.baby_log as baby_log
 import shared.sensors_db as sensors_db
 from shared.video_util import is_complete_mp4
@@ -122,7 +122,7 @@ async def _feed_reminder_loop():
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     # BLE 已分离为独立进程 ble_service.py，此处不再启动
-    asyncio.create_task(camera.rtsp_loop())
+    asyncio.create_task(go2rtc_monitor.rtsp_loop())
     asyncio.create_task(_feed_reminder_loop())
     asyncio.create_task(_ble_health_loop())
     # 录像由独立进程 recorder_service.py 负责，此处不再启动

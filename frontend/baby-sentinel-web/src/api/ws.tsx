@@ -11,7 +11,7 @@ import {
 } from "react";
 import type {
   AlertActive, AlertEntry, BabyStats, SensorFrame, WsFrame,
-} from "@/types/web";
+} from "@/types/wire";
 
 export type WsConnState = "connecting" | "open" | "closed";
 

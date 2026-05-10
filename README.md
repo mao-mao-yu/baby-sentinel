@@ -23,15 +23,14 @@
 ```
 Mac / Linux 主机                                    Pi (推荐)
 ┌─────────────────────────────────────────────┐    ┌────────────────────────┐
-│ manager.py (9091)                            │    │ sense-u-ble :8082      │
-│ ├── go2rtc                                   │    │   独立 repo，systemd   │
-│ ├── services/web/server.py (8080)            │    │   --user 单元自启      │
-│ │     ↑ 接收 sensor/alert push (POST)        │←───┤   推送 BLE 数据回主机  │
-│ └── services/recorder/service.py             │    │                        │
-│                                              │    │  https://github.com/    │
-│ services/voice/voice_service.py (8001)       │    │  mao-mao-yu/sense-u-ble │
-│   POST /voice/process  WAV→WAV               │    └────────────────────────┘
-└─────────────────────────────────────────────┘
+│ manager.py                          (:9091) │    │ sense-u-ble    (:8082) │
+│ ├── go2rtc                          (:1984) │    │   独立 repo，systemd   │
+│ ├── backend/services/web/server.py  (:8080) │    │   --user 单元自启       │
+│ │     ↑ 接收 sensor/alert push (POST)        │←──┤   推送 BLE 数据回主机   │
+│ ├── backend/services/recorder/service.py     │    │                       │
+│ └── backend/services/voice/service.py (:8001)│    │  https://github.com/   │
+│       POST /voice/process  WAV → WAV         │    │  mao-mao-yu/sense-u-ble│
+└─────────────────────────────────────────────┘    └────────────────────────┘
 ```
 
 **BLE 服务 (Sense-U Baby Pro 接入)** 已抽离为独立 repo [`sense-u-ble`](https://github.com/mao-mao-yu/sense-u-ble) 跑在 Raspberry Pi 上，通过 HTTP 把传感器数据 / 告警事件推回到这个主机的 `/api/internal/sensor`。Manager UI 里的 BLE 卡片通过 SSH 控制 Pi 上的 systemd unit 启停 + 自检 git 更新。
@@ -189,20 +188,20 @@ loginctl enable-linger $USER          # 重启自动起，无需登录
 
 详细参数 + systemd unit 模板见该 repo 的 README。
 
-### `services/recorder/config.json`（录像服务）
+### `backend/services/recorder/config.json`（录像服务）
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `sensor_interval_s` | `5` | 录像期间传感器时序写入 SQLite 的间隔（秒） |
 
-### `services/web/config.json`（Web 服务）
+### `backend/services/web/config.json`（Web 服务）
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `web_host` | `0.0.0.0` | Web 服务监听地址，`0.0.0.0` 允许局域网访问 |
 | `feed_repeat_s` | `1800` | 喂奶到点后每隔多久重复提醒（秒） |
 
-`services/voice/config.json` 见下方 [语音助手](#语音助手) 章节。
+`backend/services/voice/config.json` 见下方 [语音助手](#语音助手) 章节。
 
 #### 通知推送
 
@@ -261,9 +260,9 @@ manager 会按顺序启动：go2rtc → server → recorder → voice。BLE serv
 ### 单独启动各服务（调试用）
 
 ```bash
-./venv/bin/python services/web/server.py           # 仅主 Web 服务（含 Discord Bot）
-./venv/bin/python services/recorder/service.py     # 仅录像
-./venv/bin/python services/voice/voice_service.py  # 语音服务
+./venv/bin/python backend/services/web/server.py           # 仅主 Web 服务（含 Discord Bot）
+./venv/bin/python backend/services/recorder/service.py     # 仅录像
+./venv/bin/python backend/services/voice/service.py  # 语音服务
 # BLE: 在 Pi 上 systemctl --user start sense-u-ble.service
 ```
 
@@ -503,7 +502,7 @@ Tapo 视频走原路径（200~400ms）。**音频通常会比视频早到 50~150
 
 ### 录像录到的音频
 
-录像服务 [services/recorder/service.py](services/recorder/service.py) 在写 mp4 时统一转码到 AAC（`-c:a aac -b:a 32k`），Opus 输入兼容，无需改动。回放时显示的就是 Pi 麦的清晰音频。
+录像服务 [backend/services/recorder/service.py](backend/services/recorder/service.py) 在写 mp4 时统一转码到 AAC（`-c:a aac -b:a 32k`），Opus 输入兼容，无需改动。回放时显示的就是 Pi 麦的清晰音频。
 
 ---
 
@@ -547,65 +546,37 @@ entries(
 
 ## 目录结构
 
+完整目录 + 各文件职责详见 [STRUCTURE.md](STRUCTURE.md)。一句话概括：
+
 ```
 baby-sentinel/
-├── manager.py                       # 服务管理器（入口）
-├── config.json                      # 跨服务配置（gitignored）
-├── config.example.json              # 跨服务配置模板
-├── baby_code.json                   # 配对令牌（gitignored）
+├── manager.py                       # 服务总管 + config admin（:9091）
+├── backend/
+│   ├── shared/                      # 跨服务共用：config / sensors_db / video_util
+│   └── services/
+│       ├── web/                     # FastAPI :8080 + WS（含 alerts / baby_log / notify / state）
+│       ├── recorder/                # ffmpeg 分段录制 + 传感器时序入库
+│       └── voice/                   # Whisper STT + LLM (DeepSeek/MiniMax) + TTS（:8001）
+├── frontend/
+│   ├── baby-sentinel-web/           # 主 UI（React + Vite，构建到 backend/.../web-dist/）
+│   └── manager/                     # 管理 UI（同上，构建到 backend/.../manager-dist/）
+├── scripts/
+│   ├── pi_streamer.sh               # Pi 上 ReSpeaker → mediamtx 转流（可选）
+│   └── test_llm.py                  # LLM toolcall 调试 CLI
+├── config.json                      # 跨服务配置（gitignored；模板见 config.example.json）
+├── baby_code.json                   # Sense-U 配对令牌（gitignored）
+├── pyrightconfig.json               # extraPaths=["backend"]
 ├── requirements.txt
-├── setup.ps1                        # Windows 安装脚本
-├── setup.sh                         # macOS / Linux 安装脚本
-│
-├── shared/                          # 跨服务共享代码
-│   ├── config.py                    # ROOT_CFG + load_service_config()
-│   ├── alerts.py                    # 告警分发（Discord + Bark + WebSocket）
-│   ├── camera.py                    # go2rtc 管理与摄像头健康监控
-│   ├── state.py                     # 共享状态 + 可注入 broadcast
-│   ├── i18n.py                      # zh / ja 用户可见字符串
-│   ├── sensors_db.py                # 传感器时序 SQLite
-│   ├── video_util.py                # mp4 完整性校验
-│   └── notify/
-│       ├── _http.py                 # 共享 Discord HTTP helper
-│       ├── discord_bot.py           # Discord Gateway（Slash command）
-│       ├── discord_send.py          # Discord REST 告警发送
-│       └── bark_send.py             # Bark 多 device key 推送
-│
-├── services/
-│   ├── web/                         # 8080 — Web UI / baby_log REST / Discord Bot
-│   │   ├── server.py
-│   │   ├── baby_log.py              # 育儿日志（SQLite）
-│   │   ├── static/                  # 前端 (index/manager/playback)
-│   │   └── config.{json,example.json,py}
-│   ├── recorder/                    # 录像服务
-│   │   ├── service.py
-│   │   └── config.{json,example.json,py}
-│   └── voice/                       # 8001 — 语音服务
-│       ├── voice_service.py
-│       ├── stt.py                   # Whisper STT（faster-whisper / mlx-whisper）
-│       ├── llm_agent.py             # tool calling + 对话历史
-│       ├── llm/                     # LLM provider 抽象（base/minimax/deepseek）
-│       ├── tools/baby_records.py    # LLM 工具：写/撤销育儿日志
-│       ├── tts/                     # minimax (WS 流式) / edge-tts
-│       └── config.{json,example.json,py}
-│
-├── agent/                           # 仅剩 pi_streamer.sh：Pi 上 ReSpeaker → mediamtx
-│   └── pi_streamer.sh               # 可选；把 Pi 麦克风音频流接到 go2rtc baby 流
-│
-├── tools/
-│   └── test_llm.py                  # LLM toolcall 调试 CLI（跳过 STT/TTS）
-│
-├── docs/                            # 设计文档（gitignored）
-├── bin/                             # go2rtc / ffmpeg 二进制（gitignored）
-├── logs/                            # 日志 + baby_log.db / sensors.db（gitignored）
-└── recordings/                      # 录像（gitignored）
+└── setup.{sh,ps1}                   # 首次安装
 ```
+
+> **gitignored**：`config.json`、`logs/`、`recordings/`、`bin/`、`docs/`、`venv/`、各 service 的 `config.json` 和 `*-dist/` 构建输出。
 
 ---
 
 ## 语音助手（服务端）
 
-`services/voice/voice_service.py` 提供 **STT → LLM tool calling → TTS** 的 HTTP API（端口 8001），由 manager 自动启动。
+`backend/services/voice/service.py` 提供 **STT → LLM tool calling → TTS** 的 HTTP API（端口 8001），由 manager 自动启动。
 
 > **Pi 上的语音客户端（唤醒词 / VAD 录音）已退役**（commit `77265ed`）。当前 voice service 主要被以下两路使用，没有外部音频客户端：
 > - **Discord `/log` 命令** —— 自由文本走 LLM 工具调用写育儿日志
@@ -617,7 +588,7 @@ baby-sentinel/
 
 ```
 ┌────────────────────────────────────────────┐
-│   服务端 voice_service.py  :8001           │
+│   服务端 backend/services/voice/service.py :8001 │
 ├────────────────────────────────────────────┤
 │  POST /voice/process    WAV → STT → LLM →  │
 │                         tools → TTS → WAV  │
@@ -666,7 +637,7 @@ pip install faster-whisper
 
 ---
 
-### 配置项 `services/voice/config.json`
+### 配置项 `backend/services/voice/config.json`
 
 ##### Whisper STT
 
@@ -727,10 +698,10 @@ pip install faster-whisper
 
 ```bash
 # macOS / Linux
-./venv/bin/python services/voice/voice_service.py
+./venv/bin/python backend/services/voice/service.py
 
 # Windows
-.\venv\Scripts\python.exe services\voice\voice_service.py
+.\venv\Scripts\python.exe backend\services\voice\service.py
 ```
 
 访问 `http://localhost:8001/health` 确认服务就绪（首次启动会下载/加载 Whisper 模型，约 10~30s）。manager 默认会拉起 voice service，无需手动启动。
@@ -779,7 +750,7 @@ LLM 配置了以下工具，说中文或日语均可触发：
 
 **录像视频每段越来越长 + 前面黑屏**
 - 这是 ffmpeg segment muxer 不重置 PTS 的经典 bug
-- 已在 [services/recorder/service.py](services/recorder/service.py) 加 `-reset_timestamps 1` 修复
+- 已在 [backend/services/recorder/service.py](backend/services/recorder/service.py) 加 `-reset_timestamps 1` 修复
 - 旧损坏视频可重新封装：`ffmpeg -i broken.mp4 -c copy -avoid_negative_ts make_zero fixed.mp4`
 
 **Bark 关键告警没有响铃**
@@ -795,7 +766,7 @@ LLM 配置了以下工具，说中文或日语均可触发：
 - macOS M3 上 mlx-whisper 首次运行需从 HuggingFace 下载模型缓存，之后秒级加载
 
 **LLM 返回空或 503**
-- 检查 `services/voice/config.json` 中对应 provider 的 `*_api_key` 是否正确
+- 检查 `backend/services/voice/config.json` 中对应 provider 的 `*_api_key` 是否正确
 - MiniMax `base_url`：国内用 `https://api.minimaxi.com/v1`，国际用 `https://api.minimax.io`
 - 配额耗尽时可切 provider：`"llm_provider": "deepseek"`（或反过来）；TTS 切 `"tts_provider": "edge"` 用免费微软 TTS
 - 用 `scripts/test_llm.py "配方奶 90 毫升"` 直接打 LLM，比走 STT 链路更快定位是 LLM 还是 Whisper 的问题

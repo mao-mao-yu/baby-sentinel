@@ -4,7 +4,7 @@
 import { useT } from "@/i18n";
 import { useSensor, useWsConn } from "@/api/ws";
 import { useSensorThresholds } from "@/api/manager-config";
-import type { Posture, SensorFrame } from "@/types/web";
+import type { Posture, SensorFrame } from "@/types/wire";
 import { cn } from "@/lib/utils";
 
 export function SensorPanel() {

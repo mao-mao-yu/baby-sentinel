@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useAlerts } from "@/api/ws";
-import type { AlertEntry } from "@/types/web";
+import type { AlertEntry } from "@/types/wire";
 import { cn } from "@/lib/utils";
 
 const HIDE_AFTER_MS = 8000;

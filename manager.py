@@ -185,11 +185,11 @@ SERVICES: dict[str, dict] = {
         "name":       "Voice Service",
         "icon":       "🎙",
         "desc":       f"Whisper STT · LLM · TTS   :{ROOT_CFG.get('voice_service_port', 8001)}",
-        "cmd":        [sys.executable, "-u", "backend/services/voice/voice_service.py"],
+        "cmd":        [sys.executable, "-u", "backend/services/voice/service.py"],
         "port":       ROOT_CFG.get("voice_service_port", 8001),
         # adoptable: manager 重启时不杀 → 避免 Whisper 模型重新加载（large-v3 加载耗时 30s+）
         "adoptable":  True,
-        "script":     "backend/services/voice/voice_service.py",
+        "script":     "backend/services/voice/service.py",
     },
 }
 
@@ -580,7 +580,7 @@ def _scan_and_kill_orphans() -> None:
     _orphan_pattern = (
         "backend/services/recorder/service.py"
         "|backend/services/web/server.py"
-        "|backend/services/voice/voice_service.py"
+        "|backend/services/voice/service.py"
         "|services/recorder/service.py"
         "|services/web/server.py"
         "|services/voice/voice_service.py"
