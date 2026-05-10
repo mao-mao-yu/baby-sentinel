@@ -82,6 +82,24 @@ export function Timeline({ date, segments, events, realTs, curIdx, onSegClick, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
+  // 鼠标滚轮 → 横向滚 timeline。React 的 onWheel 默认 passive 拦不住默认页面滚动，
+  // 必须 ref + addEventListener({passive:false})。仅当 deltaX 没值（普通鼠标）时
+  // 把 deltaY 转成横向；触控板的横向 deltaX 让 outer 自己消化即可。
+  useEffect(() => {
+    const outer = railOuterRef.current;
+    if (!outer) return;
+    const onWheel = (e: WheelEvent) => {
+      const dx = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+      if (dx === 0) return;
+      e.preventDefault();
+      outer.scrollLeft += dx;
+      scheduleRecenter();
+    };
+    outer.addEventListener("wheel", onWheel, { passive: false });
+    return () => outer.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 只接受 playhead 手柄按下后启动 scrub；释放后 commit + 清空
   function pctFromClientX(clientX: number): number {
     const inner = railInnerRef.current;

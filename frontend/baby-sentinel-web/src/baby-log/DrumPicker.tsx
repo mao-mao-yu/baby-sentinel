@@ -107,6 +107,31 @@ export function DrumColumn({ items, value, onChange, cyclic = true }: DrumColumn
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
+  // ── 滚轮：每次 wheel 事件按 deltaY 方向上 / 下挪一个 item，节流防止飞太快 ──
+  // React 的 onWheel 默认 passive，preventDefault 不生效；必须用 ref +
+  // addEventListener({passive:false}) 才能拦截浏览器默认滚动。
+  // Mac 触控板惯性滚动会持续发事件，~80ms 节流避免飞太快；snap 立即 +
+  // recenter 在 240ms 后跑（同 drag 流程）。
+  useEffect(() => {
+    const el = colRef.current;
+    if (!el) return;
+    let lock = 0;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const now = Date.now();
+      if (now - lock < 80) return;
+      lock = now;
+      const dir = e.deltaY > 0 ? +1 : -1;
+      const next = clampIdx(stateRef.current.curIdx + dir);
+      stateRef.current.curIdx = next;
+      applyOffset(idxToOffset(next), true);
+      if (cyclic) setTimeout(recenter, 240);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cyclic, vLen]);
+
   // ── 拖拽 handler ────────────────────────────────────────────
   function onStart(clientY: number) {
     stateRef.current.dragging = true;
