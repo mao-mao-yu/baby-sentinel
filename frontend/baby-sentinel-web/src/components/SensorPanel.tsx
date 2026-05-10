@@ -84,6 +84,9 @@ function SensorGrid({ s }: { s: Partial<SensorFrame> }) {
   const T = useT();
   const thresh = useSensorThresholds();
 
+  // 充电中：sense-u 不出有效呼吸/体温/姿势，全部用统一占位避免显示 0 误导
+  const isCharging = s.charge === 1 || s.charge === 2;
+
   // Breath
   const breathR = s.breath_rate ?? null;
   const breathInRange = breathR != null
@@ -92,14 +95,18 @@ function SensorGrid({ s }: { s: Partial<SensorFrame> }) {
                   : breathInRange   ? T.normal
                   : breathR < thresh.breath.min ? T.slow : T.fast;
   const breathTone =
-    breathR == null ? "default" : breathInRange ? "default" : "alert";
+    isCharging ? "default"
+    : breathR == null ? "default"
+    : breathInRange ? "default" : "alert";
 
   // Temperature
   const tempV = s.temperature ?? null;
   const tempInRange = tempV != null
     && tempV >= thresh.temp.min && tempV <= thresh.temp.max;
   const tempTone =
-    tempV == null ? "default" : tempInRange ? "default" : "warn";
+    isCharging ? "default"
+    : tempV == null ? "default"
+    : tempInRange ? "default" : "warn";
   const tempColor =
     tempV == null ? "text-muted-foreground"
     : tempInRange ? "text-foreground"
@@ -111,42 +118,73 @@ function SensorGrid({ s }: { s: Partial<SensorFrame> }) {
     posture ? (T.postures[posture] ?? posture) : "";
   const isProne = posture === "prone";
   const postureTone =
-    posture == null ? "default" : isProne ? "alert" : "default";
+    isCharging ? "default"
+    : posture == null ? "default"
+    : isProne ? "alert" : "default";
 
   return (
     <div className="grid grid-cols-3 gap-2">
       <SensorCard tone={breathTone}>
         <CardLabel>{T.labelBreath}</CardLabel>
-        <CardValue className={cn(breathR == null ? "text-muted-foreground"
-                                : breathInRange ? "text-foreground" : "text-destructive")}>
-          {breathR ?? "--"}
-        </CardValue>
-        <CardUnit>{T.unitBpm}</CardUnit>
-        <CardSub>{breathSub}</CardSub>
+        {isCharging ? (
+          <ChargingPlaceholder text={T.charging} />
+        ) : (
+          <>
+            <CardValue className={cn(breathR == null ? "text-muted-foreground"
+                                    : breathInRange ? "text-foreground" : "text-destructive")}>
+              {breathR ?? "--"}
+            </CardValue>
+            <CardUnit>{T.unitBpm}</CardUnit>
+            <CardSub>{breathSub}</CardSub>
+          </>
+        )}
       </SensorCard>
 
       <SensorCard tone={tempTone}>
         <CardLabel>{T.labelTemp}</CardLabel>
-        <CardValue className={tempColor}>
-          {tempV != null ? tempV.toFixed(1) : "--"}
-        </CardValue>
-        <CardUnit>°C</CardUnit>
+        {isCharging ? (
+          <ChargingPlaceholder text={T.charging} />
+        ) : (
+          <>
+            <CardValue className={tempColor}>
+              {tempV != null ? tempV.toFixed(1) : "--"}
+            </CardValue>
+            <CardUnit>°C</CardUnit>
+          </>
+        )}
       </SensorCard>
 
       <SensorCard tone={postureTone}>
         <CardLabel>{T.labelPosture}</CardLabel>
-        {posture ? (
-          <img src={`/static/images/${posture}.png`}
-               alt={postureLabel}
-               className="my-1 max-h-16 w-auto object-contain" />
+        {isCharging ? (
+          <ChargingPlaceholder text={T.charging} />
+        ) : posture ? (
+          <>
+            <img src={`/static/images/${posture}.png`}
+                 alt={postureLabel}
+                 className="my-1 max-h-16 w-auto object-contain" />
+            <CardValue className={cn("text-base",
+                                     isProne ? "text-destructive" : "text-foreground")}>
+              {postureLabel || "--"}
+            </CardValue>
+          </>
         ) : (
-          <CardSub className="my-2">{T.postureLoading}</CardSub>
+          <>
+            <CardSub className="my-2">{T.postureLoading}</CardSub>
+            <CardValue className="text-base text-foreground">--</CardValue>
+          </>
         )}
-        <CardValue className={cn("text-base",
-                                 isProne ? "text-destructive" : "text-foreground")}>
-          {postureLabel || "--"}
-        </CardValue>
       </SensorCard>
+    </div>
+  );
+}
+
+// 充电中占位：⚡ + "充电中" 文字，垂直居中，跟其他卡片视觉高度对齐
+function ChargingPlaceholder({ text }: { text: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-1 py-2 text-muted-foreground">
+      <span className="text-2xl leading-none">⚡</span>
+      <span className="text-xs">{text}</span>
     </div>
   );
 }
