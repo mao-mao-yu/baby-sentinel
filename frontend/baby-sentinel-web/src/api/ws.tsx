@@ -9,6 +9,7 @@ import {
   createContext, useContext, useEffect, useState,
   type ReactNode,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type {
   AlertActive, AlertEntry, BabyStats, SensorFrame, WsFrame,
 } from "@/types/wire";
@@ -44,6 +45,7 @@ export function WsProvider({ children }: { children: ReactNode }) {
   const [birthDate,   setBirthDate]   = useState<string>("");
   const [alertActive, setAlertActive] = useState<AlertActive | null>(null);
   const [alerts,      setAlerts]      = useState<AlertEntry[]>([]);
+  const qc = useQueryClient();
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +86,11 @@ export function WsProvider({ children }: { children: ReactNode }) {
               const { type: _t, ...rest } = msg;
               void _t;
               setBabyStats(rest as BabyStats);
+              // 其他客户端（或 Discord bot / feed reminder）写过 baby_log 后服务端
+              // 会广播 baby_stats —— 本机的条目列表 query 也要 invalidate 才能拿到新条目。
+              // 本机自己刚写的话 pickers.tsx 已经先 invalidate 过，这里多一次 refetch
+              // React Query 会自动 dedupe，无害。
+              qc.invalidateQueries({ queryKey: ["log"] });
               break;
             }
             case "alert": {
@@ -128,7 +135,9 @@ export function WsProvider({ children }: { children: ReactNode }) {
       if (timer != null) clearTimeout(timer);
       ws?.close();
     };
-  }, []);
+    // qc 是 useQueryClient 返回的稳定引用，加进 deps 不会引起 effect 重跑；
+    // eslint exhaustive-deps 默认不识别这点，显式列上避免警告。
+  }, [qc]);
 
   return (
     <WsContext.Provider
