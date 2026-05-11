@@ -71,9 +71,11 @@ export function computeDateStats(
   return { bottleCount, bottleMl, bfL, bfR, wet, dirty, sleepMs };
 }
 
-/** "1h23m" / "23m" 格式，给 stats / wake picker 用。 */
+/** "1h23m" / "23m" 格式，给 stats / wake picker 用。
+ *  四舍五入到最近分钟（跟 backend baby_log._fmt_duration 行为对齐）：避免
+ *  ts 同分钟碰撞被 +1 秒后 floor 截掉一分钟，看上去比预期少一分钟。 */
 export function formatHm(ms: number, T: { cdHour: string; cdMin: string }): string {
-  const totalMin = Math.floor(ms / 60000);
+  const totalMin = Math.round(ms / 60000);
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
   if (h > 0) return `${h}${T.cdHour}${m}${T.cdMin}`;

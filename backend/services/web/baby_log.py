@@ -215,9 +215,12 @@ def _parse_birth_date(s: str):
 
 
 def _fmt_duration(seconds: int) -> str:
+    """秒数 → 'Xh Ym' / 'Ym'。四舍五入到最近分钟，避免 ts 同分钟冲突时
+    _next_free_ts 把 ts +1 秒造成 'h:M:59s' 被截断成少一分钟（如
+    02:50→05:10 真实 ts 差 8399s，截断 → 2h19m，看着像缺一分钟）。"""
     from services.web.i18n import t
-    h, m = divmod(abs(seconds), 3600)
-    m = m // 60
+    total_min = round(abs(seconds) / 60)
+    h, m = divmod(total_min, 60)
     return t("duration_h_m", h=h, m=m) if h else t("duration_m", m=m)
 
 

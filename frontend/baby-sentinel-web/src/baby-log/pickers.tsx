@@ -137,10 +137,14 @@ export function AmountPicker({ open, onClose, type, edit }: AmountPickerProps) {
 
   useEffect(() => {
     if (open) {
+      // 注意 deps 不含 recommend —— 它会随 babyStats WS 广播更新（喂奶计时
+      // 推进 / 其他端写记录都触发）。若列进 deps，用户打开 picker 选好时间
+      // 后被广播触发的重跑会把 time 重置回 nowTime()，覆盖用户选择。
       setAmount((edit?.entry as { amount_ml?: number } | undefined)?.amount_ml ?? recommend);
       setTime(edit?.entry.time ?? nowTime());
     }
-  }, [open, edit, recommend]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, edit]);
 
   const { add, update, remove } = useEntryMutations(onClose);
   const submitting = add.isPending || update.isPending || remove.isPending;
