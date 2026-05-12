@@ -207,9 +207,25 @@ interface TimeDrumPickerProps {
 
 export function TimeDrumPicker({ value, onChange }: TimeDrumPickerProps) {
   const [hh, mm] = value.split(":").map(Number);
-  // 入参分钟若非 5 倍数，DrumColumn 会自己 findClosest，但我们要回写 5 倍数
   const setHour   = (h: number) => onChange(`${pad(h)}:${pad(mm)}`);
   const setMinute = (m: number) => onChange(`${pad(hh)}:${pad(m)}`);
+
+  // 非 5 分钟对齐的入参（例如编辑一条 14:54 的旧记录、或当前时间是 14:54）
+  // DrumColumn 视觉会 snap 到最近格（54 → 55），但内部 onChange 不会 fire
+  // 因为 curIdx 已经"是"55 那个槽位 —— 用户看到 55、parent state 还停在 54，
+  // 保存时回写 54。这里主动 snap 一次并通知 parent，让显示与 state 一致。
+  useEffect(() => {
+    if (!MINUTES.includes(mm)) {
+      const snapped = MINUTES.reduce(
+        (best, x) => (Math.abs(x - mm) < Math.abs(best - mm) ? x : best), 0,
+      );
+      onChange(`${pad(hh)}:${pad(snapped)}`);
+    }
+    // onChange 是父组件每次重渲染都新建的箭头，列进 deps 会无限循环 fire。
+    // 只在 hh/mm 变化时检查即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hh, mm]);
+
   return (
     <div className="flex select-none items-center justify-center gap-1">
       <DrumColumn items={HOURS}   value={hh} onChange={setHour}   />
