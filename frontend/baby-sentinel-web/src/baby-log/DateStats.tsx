@@ -37,6 +37,8 @@ export function DateStats() {
       <StatCard icon="🤱" tone="rose">
         {hasBreast ? (
           <>
+            <Num>{s.breastCount}</Num><Sub>{T.statTimes}</Sub>
+            <Sep />
             <Sub>{T.sideLeft}</Sub><Num>{s.bfL}</Num>
             <Sep />
             <Sub>{T.sideRight}</Sub><Num>{s.bfR}</Num><Sub>m</Sub>

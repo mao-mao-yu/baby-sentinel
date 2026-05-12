@@ -10,6 +10,7 @@ import type { LogEntry } from "@/baby-log/types";
 export interface DateStats {
   bottleCount: number;
   bottleMl:    number;
+  breastCount: number;       // 母乳次数（包括左/右/双侧任意一种 entry）
   bfL:         number;       // 母乳左侧分钟
   bfR:         number;       // 母乳右侧分钟
   wet:         number;
@@ -29,6 +30,7 @@ export function computeDateStats(
     : dayEndTs;
 
   let bottleCount = 0, bottleMl = 0;
+  let breastCount = 0;
   let bfL = 0, bfR = 0;
   let wet = 0, dirty = 0;
   let sleepMs = 0;
@@ -43,6 +45,7 @@ export function computeDateStats(
       bottleMl += (e as { amount_ml?: number }).amount_ml ?? 0;
     }
     if (e.type === "breastfeed") {
+      breastCount++;
       const r = e as { side?: string; duration_min?: number; left_min?: number; right_min?: number };
       bfL += r.left_min  ?? (r.side === "left"  ? r.duration_min ?? 0 : 0);
       bfR += r.right_min ?? (r.side === "right" ? r.duration_min ?? 0 : 0);
@@ -68,7 +71,7 @@ export function computeDateStats(
     sleepMs += Math.max(0, sleepUpper - sleepStart) * 1000;
   }
 
-  return { bottleCount, bottleMl, bfL, bfR, wet, dirty, sleepMs };
+  return { bottleCount, bottleMl, breastCount, bfL, bfR, wet, dirty, sleepMs };
 }
 
 /** "1h23m" / "23m" 格式，给 stats / wake picker 用。
