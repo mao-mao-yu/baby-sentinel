@@ -140,11 +140,13 @@ export function AmountPicker({ open, onClose, type, edit }: AmountPickerProps) {
       // 注意 deps 不含 recommend —— 它会随 babyStats WS 广播更新（喂奶计时
       // 推进 / 其他端写记录都触发）。若列进 deps，用户打开 picker 选好时间
       // 后被广播触发的重跑会把 time 重置回 nowTime()，覆盖用户选择。
+      // edit 用 edit?.ts（primitive）而不是整个 object —— EditDialog 的 wrap
+      // 每次渲染都新建，对象引用 dep 会让 WS 触发的父重渲染重置用户选择。
       setAmount((edit?.entry as { amount_ml?: number } | undefined)?.amount_ml ?? recommend);
       setTime(edit?.entry.time ?? nowTime());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, edit]);
+  }, [open, edit?.ts]);
 
   const { add, update, remove } = useEntryMutations(onClose);
   const submitting = add.isPending || update.isPending || remove.isPending;
@@ -221,7 +223,9 @@ export function BreastPicker({ open, onClose, edit }: BreastPickerProps) {
     setLeftMin(initLeftMin);
     setRightMin(initRightMin);
     setTime(edit?.entry.time ?? nowTime());
-  }, [open, edit, initLeftEnabled, initRightEnabled, initLeftMin, initRightMin]);
+    // edit?.ts 而非 edit —— 见 AmountPicker 同处注释
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, edit?.ts]);
 
   const { add, update, remove } = useEntryMutations(onClose);
   const submitting = add.isPending || update.isPending || remove.isPending;
@@ -314,7 +318,9 @@ export function PoopPicker({ open, onClose, edit }: PoopPickerProps) {
     setConsistency(e?.consistency ?? "normal");
     setColor      (e?.color       ?? "yellow");
     setTime(edit?.entry.time ?? nowTime());
-  }, [open, edit, e]);
+    // edit?.ts 而非 edit/e —— 见 AmountPicker 同处注释
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, edit?.ts]);
 
   const { add, update, remove } = useEntryMutations(onClose);
   const submitting = add.isPending || update.isPending || remove.isPending;
@@ -407,7 +413,9 @@ export function NumberPicker({ open, onClose, type, edit }: NumberPickerProps) {
     if (!open) return;
     setValue(e?.value ?? cfg.default);
     setTime(edit?.entry.time ?? nowTime());
-  }, [open, edit, e, cfg.default]);
+    // edit?.ts 而非 edit/e —— 见 AmountPicker 同处注释
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, edit?.ts]);
 
   const { add, update, remove } = useEntryMutations(onClose);
   const submitting = add.isPending || update.isPending || remove.isPending;
@@ -455,7 +463,9 @@ export function SimplePicker({ open, onClose, title, buildPayload, edit }: Simpl
   const [time, setTime] = useState<string>(edit?.entry.time ?? nowTime());
   useEffect(() => {
     if (open) setTime(edit?.entry.time ?? nowTime());
-  }, [open, edit]);
+    // edit?.ts 而非 edit —— 见 AmountPicker 同处注释
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, edit?.ts]);
 
   const { add, update, remove } = useEntryMutations(onClose);
   const submitting = add.isPending || update.isPending || remove.isPending;
