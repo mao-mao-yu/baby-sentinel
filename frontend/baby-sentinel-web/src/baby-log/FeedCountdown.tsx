@@ -56,8 +56,10 @@ export function FeedCountdown() {
       <div className="mt-0.5 flex items-baseline justify-between gap-2">
         <span className="text-2xl font-semibold">{timeStr}</span>
         <span className={cn(
-          "text-sm",
-          overdue ? "text-destructive" : soonish ? "text-amber-300" : "text-foreground",
+          "text-sm font-medium",
+          overdue ? "text-destructive"
+                  : soonish ? "text-amber-700 dark:text-amber-300"
+                            : "text-foreground",
         )}>
           {durationStr}
         </span>
