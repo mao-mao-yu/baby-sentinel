@@ -124,27 +124,42 @@ export function CameraView() {
     };
   }, [camOk, go2rtcPort, retryToken]);
 
-  // ── 12s 看门狗 ────────────────────────────────────────────────────
-  // WebRTC 协商成功但实际没帧（go2rtc 路上断了）时，video.readyState 卡在 < 3。
-  // 12s 后强制 bump retryToken 重连。
+  // ── 看门狗：currentTime 推进判定 ───────────────────────────────────
+  // 旧的 v.readyState >= 3 探活有洞：video element 一旦拿到过帧，readyState
+  // 就常驻 4 / HAVE_ENOUGH_DATA，即便流真的断了也保持最后一帧。iOS 后台 throttle
+  // 解锁后流断 / Windows WebRTC 解码卡死 都会陷在这种"看似 ready、实际没新帧"的状态。
+  //
+  // 真正可靠的健康指标：video.currentTime 应当每秒推进 1s。停滞超过 5s 视为
+  // 流断了，强制重拨 WebRTC。probe 间隔 2s，反应窗口 5-7s 比之前 12s 紧很多。
   useEffect(() => {
     if (!camOk) return;
+    let lastCT = -1;
     let stalledSince = 0;
     const id = setInterval(() => {
       const v = videoRef.current;
       if (!v || !pcRef.current) return;
-      if (v.readyState >= 3) {
+      // 页面 hidden / 视频暂停时跳过：浏览器主动停了渲染，等 visibilitychange handler
+      // 在回前台时统一重连；这里继续判定会无谓重启。
+      if (v.paused || document.hidden) {
+        lastCT = v.currentTime;
+        stalledSince = 0;
+        return;
+      }
+      const ct = v.currentTime;
+      if (ct !== lastCT) {
+        lastCT = ct;
         stalledSince = 0;
         return;
       }
       if (stalledSince === 0) {
         stalledSince = Date.now();
-      } else if (Date.now() - stalledSince > 12000) {
-        console.warn("[WebRTC] 视频长时间无数据，重连...");
+      } else if (Date.now() - stalledSince > 5000) {
+        console.warn("[WebRTC] currentTime 停滞 > 5s，重连...");
         stalledSince = 0;
+        lastCT = -1;
         setRetryToken((n) => n + 1);
       }
-    }, 3000);
+    }, 2000);
     return () => clearInterval(id);
   }, [camOk]);
 
