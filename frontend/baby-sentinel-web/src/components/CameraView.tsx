@@ -75,10 +75,18 @@ export function CameraView() {
         }
       };
 
+      // ICE 重连守卫：建连阶段 ICE 偶尔会 new → checking → failed → checking →
+      // connected 闪过 failed 一下；如果无脑响应这次 failed，3s 后会把刚连上的
+      // PC 拆了重来，造成"连接 ↔ 正常"横跳。只在曾经 connected 过之后才认这次
+      // failed/disconnected 为真死亡，触发重连。
+      let wasConnected = false;
       pc.oniceconnectionstatechange = () => {
         if (!pc) return;
-        // 'disconnected' 在 iOS 上是瞬态，自己会恢复；只在 'failed' 终态重连
-        if (pc.iceConnectionState === "failed" && !cancelled) {
+        if (pc.iceConnectionState === "connected" ||
+            pc.iceConnectionState === "completed") {
+          wasConnected = true;
+        }
+        if (pc.iceConnectionState === "failed" && wasConnected && !cancelled) {
           setTimeout(() => setRetryToken((n) => n + 1), 3000);
         }
       };
@@ -124,60 +132,13 @@ export function CameraView() {
     };
   }, [camOk, go2rtcPort, retryToken]);
 
-  // ── 看门狗：framesDecoded 推进判定 ─────────────────────────────────
-  // 不能用 v.readyState（一旦解码过任何一帧就常驻 4），也不能用 v.currentTime
-  // （WebRTC MediaStream 下行为跨浏览器不一致：Safari 经常不推进、Chrome 推进
-  // 节奏不固定 —— 之前用 ct 判定造成"连接 ↔ 播放"震荡）。
-  //
-  // 用 WebRTC 标准 stats `inbound-rtp.framesDecoded`：解码器吃进去的帧数，
-  // 跨浏览器一致。frames 一直不增 → 流真的断了。
-  //
-  // deps 包含 retryToken：每次重连都重置 stalledSince + lastFrames 基线，
-  // 避免上轮的 stalled 计数误触发新一轮重连，形成死循环。
-  useEffect(() => {
-    if (!camOk) return;
-    let lastFrames = -1;
-    let stalledSince = 0;
-    const id = setInterval(async () => {
-      const pc = pcRef.current;
-      if (!pc || document.hidden) {
-        stalledSince = 0;
-        return;
-      }
-      let frames = 0;
-      try {
-        const stats = await pc.getStats();
-        stats.forEach((s) => {
-          if (s.type === "inbound-rtp" && (s as { kind?: string }).kind === "video") {
-            frames = (s as { framesDecoded?: number }).framesDecoded ?? 0;
-          }
-        });
-      } catch {
-        return;
-      }
-      // frames === 0：握手 / 首帧前，建立基线，不算 stall
-      if (frames === 0) {
-        lastFrames = 0;
-        stalledSince = 0;
-        return;
-      }
-      if (frames !== lastFrames) {
-        lastFrames = frames;
-        stalledSince = 0;
-        return;
-      }
-      // frames 大于 0 且不增 → 真停了
-      if (stalledSince === 0) {
-        stalledSince = Date.now();
-      } else if (Date.now() - stalledSince > 7000) {
-        console.warn("[WebRTC] framesDecoded 停滞 > 7s，重连...");
-        stalledSince = 0;
-        lastFrames = -1;
-        setRetryToken((n) => n + 1);
-      }
-    }, 3000);
-    return () => clearInterval(id);
-  }, [camOk, retryToken]);
+  // 注：之前这里有"帧停滞看门狗"（先 readyState、再 currentTime、再 framesDecoded
+  // 三个版本），都会跟 ICE 建连阶段抢着触发 retryToken，造成"连接 ↔ 正常"横跳。
+  // 现在主动重连只由两条路径触发：
+  //   1) ICE failed（且必须曾经 connected 过，见上面 wasConnected 守卫）
+  //   2) visibilitychange（页面回前台时刷一次，覆盖 iOS 后台 throttle 后的 dead PC）
+  // 如果未来重新引入 watchdog，要确保它在握手期间静默（pc.connectionState !==
+  // "connected" 时不计 stall），并且要用 ref 跨 retry 重置基线。
 
   // ── 回前台强制重连 ────────────────────────────────────────────────
   useEffect(() => {
