@@ -19,12 +19,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import asyncio
-import json
 import os
 import shutil
 import time
-import urllib.request
 from datetime import date
+
+import httpx
 
 from shared import sensors_db
 from shared.config import BASE_DIR, ROOT_CFG, REC_DIR, log
@@ -38,6 +38,24 @@ CLEANUP_INTERVAL_S      = 600
 CLEANUP_AGE_THRESHOLD_S = max(SEGMENT_S * 2, 300)
 
 # ── 工具函数 ──────────────────────────────────────────────────────────
+
+# 持久 HTTP client（连接池 + keep-alive）。
+# recorder 每 BLE_POLL_S 秒（默认 2s）GET 一次 /api/sensor；用 urllib.urlopen
+# 每次开新 TCP 不 keep-alive → 留下 TIME_WAIT 累积，几小时内能耗光 macOS
+# 16k 个 ephemeral port，整个 localhost loopback 通信瘫痪。httpx.Client 自动
+# 复用连接，每个 (host, port) 只占一个 TCP，TIME_WAIT 消失。
+_http = httpx.Client(timeout=3.0, limits=httpx.Limits(max_keepalive_connections=4))
+
+
+def _http_get(url: str) -> dict | None:
+    try:
+        r = _http.get(url)
+        if r.status_code == 200:
+            return r.json()
+        return None
+    except Exception:
+        return None
+
 
 def _day_dir(d: date | None = None) -> str:
     day  = (d or date.today()).isoformat()
@@ -60,12 +78,9 @@ def _ffmpeg_bin() -> str | None:
     return shutil.which("ffmpeg")
 
 
-def _http_get(url: str) -> dict | None:
-    try:
-        with urllib.request.urlopen(url, timeout=3) as r:
-            return json.loads(r.read())
-    except Exception:
-        return None
+
+
+
 
 
 def _go2rtc_ready() -> bool:
