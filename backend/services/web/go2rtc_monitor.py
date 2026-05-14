@@ -2,9 +2,9 @@
 
 go2rtc 子进程由 manager (`SERVICES['go2rtc']`) 负责拉起；这里只做：
   - 周期 HTTP probe `/api/streams?src=baby` 拿 producer.bytes_recv
-  - 任一不正常状态（HTTP 不通 / producers 空 / bytes_recv 不增长）→ cam_ok=false
-  - 持续 4 次（12s）异常 → POST `/api/manager/go2rtc/restart` 让 manager 拉起新进程
-    （带 90s cooldown 防抖）。这里覆盖两类故障：
+  - 连续 2 次异常（6s）→ cam_ok=false（避免单次瞬态抖动让前端拆 WebRTC）
+  - 连续 4 次异常（12s）→ POST `/api/manager/go2rtc/restart`（带 90s cooldown）
+    覆盖两类故障：
       a) Tapo "假活"：TCP/HTTP 都 200 但 bytes_recv 不动（PLAY 后断流）
       b) go2rtc 进程整个死掉：HTTP connection refused —— manager 接管的孤儿
          没有 watchdog 时这里就是唯一的复活路径
@@ -21,8 +21,9 @@ import services.web.state as state
 from shared.config import ROOT_CFG, log
 
 
-# 连续 N 次异常 probe（HTTP 不通 / producers 空 / bytes 不增长）→ cam_ok=false 并请求重启。
-# 周期 3s × 4 = 12s 容忍窗，足以吸收正常网络抖动，又不至于让画面僵太久。
+# 连续 N 次异常 → cam_ok=false（前端拆 WebRTC）。N=2 即 6s 容忍单次瞬态。
+_BAD_PROBES_FOR_BAD     = 2
+# 连续 N 次异常 → 请求 manager 重启。N=4 即 12s（必然 > BAD 阈值）。
 _BAD_PROBES_FOR_RESTART = 4
 # 连发重启请求的最小间隔，避免 manager 起新进程过程中再次被触发，造成 restart loop。
 # Tapo 抽风时新 go2rtc 起来到拉到第一帧大概 5-10s，给点冗余。
@@ -42,7 +43,10 @@ async def _probe_stream(port: int) -> tuple[bool, int]:
 
     def _req() -> tuple[bool, int]:
         url = f"http://127.0.0.1:{port}/api/streams?src=baby"
-        with urllib.request.urlopen(url, timeout=2) as r:
+        # timeout=5s（之前 2s 太紧）：go2rtc 同时服务多个 WebRTC consumer 时
+        # /api/streams 偶发响应慢 2-3s，2s 超时会假报"HTTP 不通"，导致 cam_ok
+        # 抖动 → 前端疯狂重建 WebRTC。
+        with urllib.request.urlopen(url, timeout=5) as r:
             data = json.load(r)
         producers = data.get("producers") or []
         if not producers:
@@ -91,24 +95,24 @@ async def rtsp_loop() -> None:
     while True:
         alive, bytes_recv = await _probe_stream(port)
 
+        # 累计 bad_count，不立刻把 ok 翻 false ——避免单次瞬态 timeout 让前端拆 WebRTC
         if not alive:
-            # HTTP 不通 / producers 空 → 异常计数，复位 bytes 基线
+            # HTTP 不通 / producers 空
             _bad_count += 1
             _last_bytes = -1
-            ok = False
         elif _last_bytes < 0:
-            # 首次拿到值，作基线，本轮判 ok（不计入异常）
+            # 首次拿到值，作基线
             _last_bytes = bytes_recv
             _bad_count = 0
-            ok = True
         elif bytes_recv > _last_bytes:
             _last_bytes = bytes_recv
             _bad_count = 0
-            ok = True
         else:
-            # HTTP 活但 bytes 没动 → 计为异常（"假活"）
+            # HTTP 活但 bytes 没动 → "假活"
             _bad_count += 1
-            ok = _bad_count < _BAD_PROBES_FOR_RESTART
+
+        # ok 只在连续 _BAD_PROBES_FOR_BAD 次都异常后才翻 false
+        ok = _bad_count < _BAD_PROBES_FOR_BAD
 
         if ok != state.sensor_state["cam_ok"]:
             state.sensor_state["cam_ok"] = ok
@@ -116,8 +120,8 @@ async def rtsp_loop() -> None:
             cause = "HTTP 不通" if not alive else f"假活 stall (bytes={bytes_recv})"
             log.info(f"[go2rtc] {'就绪' if ok else f'离线 ({cause}, bad={_bad_count})'}")
 
-        # 异常累计够阈值 → 请求 manager 重启（cooldown 内幂等）
-        if (not ok) and _bad_count >= _BAD_PROBES_FOR_RESTART:
+        # 异常累计够 restart 阈值 → 请求 manager 重启（cooldown 内幂等）
+        if _bad_count >= _BAD_PROBES_FOR_RESTART:
             if await _trigger_restart():
                 # 已发起重启，复位计数让新进程上来时重新建立基线，cooldown 期间不重复触发
                 _last_bytes = -1
