@@ -8,15 +8,18 @@
 import { useEffect, useRef, useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 import { useT } from "@/i18n";
-import { useSensor } from "@/api/ws";
 import { useGo2rtcPort } from "@/api/manager-config";
 import { cn } from "@/lib/utils";
 
 export function CameraView() {
   const T = useT();
-  const sensor = useSensor();
-  const camOk = !!sensor.cam_ok;
   const go2rtcPort = useGo2rtcPort();
+
+  // 注意：CameraView 不再依赖 sensor.cam_ok。
+  // 历史教训：cam_ok 由 backend go2rtc_monitor 通过 WS 广播，所有浏览器同步收到。
+  // 一旦后端 monitor 误判（比如 go2rtc HTTP API 偶发 bug），所有客户端会同步拆掉
+  // 健康的 WebRTC PC 重建 → 死循环 flicker。让 WebRTC 自己 SDP fetch 成功/失败决定
+  // 是否 retry 才稳定。Header 上的"摄像头"pill 还是看 cam_ok 显示状态。
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -32,17 +35,9 @@ export function CameraView() {
   const [retryToken, setRetryToken] = useState(0);
 
   // ── 主连接 effect ──────────────────────────────────────────────────
+  // mount 时建立 WebRTC，go2rtcPort / retryToken 变化时重建。SDP fetch 失败会
+  // 走 catch 5s 后 retry，无需 cam_ok 提前阻断。
   useEffect(() => {
-    if (!camOk) {
-      // 不该跑：清理任何残留连接
-      const pc = pcRef.current;
-      pcRef.current = null;
-      pc?.close();
-      if (videoRef.current) videoRef.current.srcObject = null;
-      setLive(false);
-      return;
-    }
-
     let cancelled = false;
     let pc: RTCPeerConnection | null = null;
 
@@ -130,7 +125,7 @@ export function CameraView() {
       if (videoRef.current) videoRef.current.srcObject = null;
       setLive(false);
     };
-  }, [camOk, go2rtcPort, retryToken]);
+  }, [go2rtcPort, retryToken]);
 
   // 注：之前这里有"帧停滞看门狗"（先 readyState、再 currentTime、再 framesDecoded
   // 三个版本），都会跟 ICE 建连阶段抢着触发 retryToken，造成"连接 ↔ 正常"横跳。
@@ -143,14 +138,14 @@ export function CameraView() {
   // ── 回前台强制重连 ────────────────────────────────────────────────
   useEffect(() => {
     const onVis = () => {
-      if (!document.hidden && camOk) {
+      if (!document.hidden) {
         // 用 timeout 让浏览器先把 throttle 状态恢复回来
         setTimeout(() => setRetryToken((n) => n + 1), 500);
       }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [camOk]);
+  }, []);
 
   // ── 静音同步 ────────────────────────────────────────────────────
   useEffect(() => {

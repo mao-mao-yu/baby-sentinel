@@ -1,20 +1,20 @@
-"""go2rtc 健康监测 + 自愈。
+"""go2rtc 健康监测 + 自愈（精简版）。
 
-go2rtc 子进程由 manager (`SERVICES['go2rtc']`) 负责拉起；这里只做：
-  - 周期 HTTP probe `/api/streams?src=baby` 拿 producer.bytes_recv
-  - 连续 5 次异常（≥15s）→ cam_ok=false（go2rtc HTTP 偶发 lock 卡 10s，
-    单次瞬态绝对不能把 cam_ok 翻 false——前端会拆掉正在用的 WebRTC PC）
-  - 连续 8 次异常（≥24s）→ POST `/api/manager/go2rtc/restart`（带 90s cooldown）
-    覆盖两类故障：
-      a) Tapo "假活"：TCP/HTTP 都 200 但 bytes_recv 不动（PLAY 后断流）
-      b) go2rtc 进程整个死掉：HTTP connection refused —— manager 接管的孤儿
-         没有 watchdog 时这里就是唯一的复活路径
-  - 状态切换时广播 `{type: sensor}` 给 WS client，前端 cam pill / WebRTC 跟着切
+go2rtc 子进程由 manager (`SERVICES['go2rtc']`) 负责拉起；这里只做两件事：
+  1. 周期 TCP connect probe go2rtc 端口（1984）。连得上 → cam_ok=true，否则 false。
+  2. 连续 5 次 (≥15s) TCP 连不上 → POST `/api/manager/go2rtc/restart`（90s cooldown）。
 
-go2rtc.yaml 由 manager._gen_go2rtc_yaml 生成；这里不再 spawn / 写 yaml。
+历史教训：曾用 HTTP `/api/streams?src=baby` 探活，看 producer.bytes_recv 是否
+增长来抓 "假活"。但 go2rtc 1.9.14 这个 API 在同时服务多 WebRTC consumer 时
+有 ~50% 概率返回空 body / 偶发 10s lock 卡死。任何基于 HTTP 的判定都不可靠，
+会误把 cam_ok 翻 false → 所有浏览器同步拆 WebRTC → 死循环式 flicker。
+
+纯 TCP probe 不走 go2rtc HTTP 栈，不受 API bug 影响。代价：丢了 "假活" 检测
+（go2rtc 进程在但 RTSP 断流的情况）—— 这场景下浏览器侧 ICE 会自己检测到无帧，
+30-60s 后浏览器主动失败重连；不再依赖服务端帮忙。
 """
 import asyncio
-import json
+import socket
 import time
 import urllib.request
 
@@ -22,50 +22,34 @@ import services.web.state as state
 from shared.config import ROOT_CFG, log
 
 
-# 连续 N 次异常 → cam_ok=false（前端拆 WebRTC）。
-# 必须远超 go2rtc HTTP API 的 lock 卡死时长：cam_ok=false 会让浏览器拆掉
-# 正常工作的 WebRTC PC 并重建。哪怕只是 HTTP 慢但 RTP 还在转发，拆 PC 也是
-# 错的（且 PC 重建会进一步给 go2rtc 增压，雪崩）。N=5 → 至少 15s 持续坏。
-_BAD_PROBES_FOR_BAD     = 5
-# 连续 N 次异常 → 请求 manager 重启。
-_BAD_PROBES_FOR_RESTART = 8
-# 连发重启请求的最小间隔，避免 manager 起新进程过程中再次被触发，造成 restart loop。
-# Tapo 抽风时新 go2rtc 起来到拉到第一帧大概 5-10s，给点冗余。
-_RESTART_COOLDOWN_S = 90
+_BAD_PROBES_FOR_BAD     = 5     # 连续 5 次 TCP 失败 (≥15s) → cam_ok=false
+_BAD_PROBES_FOR_RESTART = 8     # 连续 8 次 TCP 失败 (≥24s) → 请求重启
+_RESTART_COOLDOWN_S     = 90    # 重启请求最小间隔
 
-_last_bytes:      int   = -1     # 上一次 probe 的 bytes_recv；-1 = 还没基线
-_bad_count:       int   = 0      # 连续异常 probe 数（不区分 HTTP 死 / 假活）
-_last_restart_at: float = 0.0    # unix 秒，0 = 从未触发
+_bad_count:       int   = 0
+_last_restart_at: float = 0.0
 
 
-async def _probe_stream(port: int) -> tuple[bool, int]:
-    """probe go2rtc /api/streams?src=baby。
-    返回 (alive, bytes_recv)；alive=False 时 bytes 永远 0。
-    alive=True 但 producers=[] 也算 not alive（RTSP 连不上 Tapo 时 go2rtc 仍会响应 HTTP，
-    但 producers 是空列表）。"""
+async def _probe_tcp(port: int, timeout: float = 2.0) -> bool:
+    """TCP connect 探活。Connect 成功就当 go2rtc 还活着——不走 HTTP 栈避免
+    go2rtc 1.9.14 的 /api API bug。"""
     loop = asyncio.get_event_loop()
 
-    def _req() -> tuple[bool, int]:
-        url = f"http://127.0.0.1:{port}/api/streams?src=baby"
-        # timeout=10s：go2rtc 同时服务多个 WebRTC consumer 时 /api/streams
-        # 偶发会内部 lock 卡 10s（实测 10 次里有 1 次），其他 9 次都是亚毫秒。
-        # 这种卡死跟实际流是否在动无关——RTP 转发是独立线程的。timeout 必须
-        # 大于实测的卡死时长，否则会假报"HTTP 不通"。
-        with urllib.request.urlopen(url, timeout=10) as r:
-            data = json.load(r)
-        producers = data.get("producers") or []
-        if not producers:
-            return (False, 0)
-        return (True, int(producers[0].get("bytes_recv", 0)))
+    def _connect() -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+                return True
+        except OSError:
+            return False
 
     try:
-        return await loop.run_in_executor(None, _req)
+        return await loop.run_in_executor(None, _connect)
     except Exception:
-        return (False, 0)
+        return False
 
 
 async def _trigger_restart() -> bool:
-    """让 manager 重启 go2rtc。带 cooldown 防抖，超出 _RESTART_COOLDOWN_S 才会真发请求。"""
+    """请求 manager 重启 go2rtc。带 cooldown 防抖。"""
     global _last_restart_at
     now = time.time()
     if now - _last_restart_at < _RESTART_COOLDOWN_S:
@@ -85,7 +69,7 @@ async def _trigger_restart() -> bool:
 
     try:
         status = await loop.run_in_executor(None, _req)
-        log.warning(f"[go2rtc] 出帧停滞，已请求 manager 重启 → HTTP {status}")
+        log.warning(f"[go2rtc] TCP 持续不通，已请求 manager 重启 → HTTP {status}")
         return status == 200
     except Exception as e:
         log.warning(f"[go2rtc] manager 重启请求失败：{e}")
@@ -93,43 +77,27 @@ async def _trigger_restart() -> bool:
 
 
 async def rtsp_loop() -> None:
-    global _last_bytes, _bad_count
+    global _bad_count
     port = int(ROOT_CFG.get("go2rtc_port", 1984))
-    log.info(f"[go2rtc] 健康监测启动 → :{port}")
+    log.info(f"[go2rtc] 健康监测启动（TCP probe）→ :{port}")
 
     while True:
-        alive, bytes_recv = await _probe_stream(port)
+        alive = await _probe_tcp(port)
 
-        # 累计 bad_count，不立刻把 ok 翻 false ——避免单次瞬态 timeout 让前端拆 WebRTC
-        if not alive:
-            # HTTP 不通 / producers 空
-            _bad_count += 1
-            _last_bytes = -1
-        elif _last_bytes < 0:
-            # 首次拿到值，作基线
-            _last_bytes = bytes_recv
-            _bad_count = 0
-        elif bytes_recv > _last_bytes:
-            _last_bytes = bytes_recv
+        if alive:
             _bad_count = 0
         else:
-            # HTTP 活但 bytes 没动 → "假活"
             _bad_count += 1
 
-        # ok 只在连续 _BAD_PROBES_FOR_BAD 次都异常后才翻 false
         ok = _bad_count < _BAD_PROBES_FOR_BAD
 
         if ok != state.sensor_state["cam_ok"]:
             state.sensor_state["cam_ok"] = ok
             await state.broadcast({"type": "sensor", **state.sensor_state})
-            cause = "HTTP 不通" if not alive else f"假活 stall (bytes={bytes_recv})"
-            log.info(f"[go2rtc] {'就绪' if ok else f'离线 ({cause}, bad={_bad_count})'}")
+            log.info(f"[go2rtc] {'就绪' if ok else f'离线 (TCP 连不上, bad={_bad_count})'}")
 
-        # 异常累计够 restart 阈值 → 请求 manager 重启（cooldown 内幂等）
         if _bad_count >= _BAD_PROBES_FOR_RESTART:
             if await _trigger_restart():
-                # 已发起重启，复位计数让新进程上来时重新建立基线，cooldown 期间不重复触发
-                _last_bytes = -1
                 _bad_count = 0
 
         await asyncio.sleep(3)
