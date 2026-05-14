@@ -124,44 +124,60 @@ export function CameraView() {
     };
   }, [camOk, go2rtcPort, retryToken]);
 
-  // ── 看门狗：currentTime 推进判定 ───────────────────────────────────
-  // 旧的 v.readyState >= 3 探活有洞：video element 一旦拿到过帧，readyState
-  // 就常驻 4 / HAVE_ENOUGH_DATA，即便流真的断了也保持最后一帧。iOS 后台 throttle
-  // 解锁后流断 / Windows WebRTC 解码卡死 都会陷在这种"看似 ready、实际没新帧"的状态。
+  // ── 看门狗：framesDecoded 推进判定 ─────────────────────────────────
+  // 不能用 v.readyState（一旦解码过任何一帧就常驻 4），也不能用 v.currentTime
+  // （WebRTC MediaStream 下行为跨浏览器不一致：Safari 经常不推进、Chrome 推进
+  // 节奏不固定 —— 之前用 ct 判定造成"连接 ↔ 播放"震荡）。
   //
-  // 真正可靠的健康指标：video.currentTime 应当每秒推进 1s。停滞超过 5s 视为
-  // 流断了，强制重拨 WebRTC。probe 间隔 2s，反应窗口 5-7s 比之前 12s 紧很多。
+  // 用 WebRTC 标准 stats `inbound-rtp.framesDecoded`：解码器吃进去的帧数，
+  // 跨浏览器一致。frames 一直不增 → 流真的断了。
+  //
+  // deps 包含 retryToken：每次重连都重置 stalledSince + lastFrames 基线，
+  // 避免上轮的 stalled 计数误触发新一轮重连，形成死循环。
   useEffect(() => {
     if (!camOk) return;
-    let lastCT = -1;
+    let lastFrames = -1;
     let stalledSince = 0;
-    const id = setInterval(() => {
-      const v = videoRef.current;
-      if (!v || !pcRef.current) return;
-      // 页面 hidden / 视频暂停时跳过：浏览器主动停了渲染，等 visibilitychange handler
-      // 在回前台时统一重连；这里继续判定会无谓重启。
-      if (v.paused || document.hidden) {
-        lastCT = v.currentTime;
+    const id = setInterval(async () => {
+      const pc = pcRef.current;
+      if (!pc || document.hidden) {
         stalledSince = 0;
         return;
       }
-      const ct = v.currentTime;
-      if (ct !== lastCT) {
-        lastCT = ct;
+      let frames = 0;
+      try {
+        const stats = await pc.getStats();
+        stats.forEach((s) => {
+          if (s.type === "inbound-rtp" && (s as { kind?: string }).kind === "video") {
+            frames = (s as { framesDecoded?: number }).framesDecoded ?? 0;
+          }
+        });
+      } catch {
+        return;
+      }
+      // frames === 0：握手 / 首帧前，建立基线，不算 stall
+      if (frames === 0) {
+        lastFrames = 0;
         stalledSince = 0;
         return;
       }
+      if (frames !== lastFrames) {
+        lastFrames = frames;
+        stalledSince = 0;
+        return;
+      }
+      // frames 大于 0 且不增 → 真停了
       if (stalledSince === 0) {
         stalledSince = Date.now();
-      } else if (Date.now() - stalledSince > 5000) {
-        console.warn("[WebRTC] currentTime 停滞 > 5s，重连...");
+      } else if (Date.now() - stalledSince > 7000) {
+        console.warn("[WebRTC] framesDecoded 停滞 > 7s，重连...");
         stalledSince = 0;
-        lastCT = -1;
+        lastFrames = -1;
         setRetryToken((n) => n + 1);
       }
-    }, 2000);
+    }, 3000);
     return () => clearInterval(id);
-  }, [camOk]);
+  }, [camOk, retryToken]);
 
   // ── 回前台强制重连 ────────────────────────────────────────────────
   useEffect(() => {
