@@ -47,12 +47,24 @@ async def broadcast(data: dict) -> None:
         return
     if not active_ws:
         return
-    msg  = json.dumps(data, ensure_ascii=False)
-    dead: Set[WebSocket] = set()
-    for ws in list(active_ws):
+    msg = json.dumps(data, ensure_ascii=False)
+
+    # 并行 + 单连接 2s 超时：之前是串行 await，任一客户端的 TCP buffer 满
+    # （手机锁屏 / 网络慢 / 已断但 socket 未识别）就让整个 broadcast 卡死，
+    # 连带 POST /api/log 等调用 broadcast 的 handler 也 hang 直到 TCP keepalive
+    # 超时。改并行后慢客户端单独超时被踢，不影响其他端。
+    import asyncio
+    async def _send_one(ws: WebSocket) -> WebSocket | None:
         try:
-            await ws.send_text(msg)
+            await asyncio.wait_for(ws.send_text(msg), timeout=2.0)
+            return None
         except Exception:
-            dead.add(ws)
-    for ws in dead:
-        active_ws.discard(ws)
+            return ws
+
+    results = await asyncio.gather(
+        *(_send_one(ws) for ws in list(active_ws)),
+        return_exceptions=False,
+    )
+    for dead_ws in results:
+        if dead_ws is not None:
+            active_ws.discard(dead_ws)

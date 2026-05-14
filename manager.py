@@ -463,8 +463,11 @@ def _get_port_pid(port: int) -> int | None:
                     if parts[1].rsplit(":", 1)[-1] == str(port):
                         return int(parts[4])
         else:
+            # -sTCP:LISTEN 关键：只筛 listening socket，不包括 client outbound 连接。
+            # 否则浏览器打开 http://localhost:8080 时 lsof 会把 Safari/Chrome 这种
+            # 客户端也报成"在用 8080"，manager 误判为"第三方占用"，拒绝启动 server。
             out = subprocess.check_output(
-                ["lsof", "-ti", f"tcp:{port}"],
+                ["lsof", "-ti", "-sTCP:LISTEN", f"tcp:{port}"],
                 text=True, stderr=subprocess.DEVNULL, timeout=5,
             )
             pids = [p for p in out.strip().split() if p.isdigit()]
