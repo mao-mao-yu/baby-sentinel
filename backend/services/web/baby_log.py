@@ -137,10 +137,14 @@ def _find_open_sleep_start_db(
     conn: sqlite3.Connection,
     before_ts: int,
     date_pref: tuple[str, ...],
+    exclude_ts: int | None = None,
 ) -> tuple[int, str, dict] | None:
     """语义对齐 _find_open_sleep_start (list 版)：在 date_pref 列出的日期里
     按优先级查找第一个未闭合的 sleep-start（cross_day_wake_ts 未设 → 视为未闭合）。
-    返回 (ts, date, payload_dict) 或 None。"""
+    返回 (ts, date, payload_dict) 或 None。
+
+    exclude_ts：跳过这一行不算（update_entry 编辑现有 wake-end 时用——否则会把
+    被编辑那条 end 当作"已闭合 start"的证据，永远返回 None，duration_str 不更新）。"""
     for d in date_pref:
         rows = conn.execute(
             "SELECT ts, action, payload FROM entries "
@@ -150,6 +154,8 @@ def _find_open_sleep_start_db(
         ).fetchall()
         cur: tuple[int, str, dict] | None = None
         for r in rows:
+            if exclude_ts is not None and r["ts"] == exclude_ts:
+                continue
             payload = json.loads(r["payload"]) if r["payload"] else {}
             if r["action"] == "start" and not payload.get("cross_day_wake_ts"):
                 cur = (r["ts"], d, payload)
@@ -329,8 +335,11 @@ def update_entry(ts: int, updates: dict) -> dict | None:
             # 用旧 ts 清掉旧的跨日标记
             _clear_cross_day_wake_db(conn, ts)
             yesterday_str = (date.fromisoformat(date_key) - timedelta(days=1)).isoformat()
+            # exclude_ts=ts：把"正在编辑的这条 wake-end"从扫描里剔除——否则它会
+            # 把对应的 sleep-start 当作已闭合，找不到 open start，duration_str 不更新。
             found = _find_open_sleep_start_db(
-                conn, before_ts=new_ts, date_pref=(date_key, yesterday_str)
+                conn, before_ts=new_ts, date_pref=(date_key, yesterday_str),
+                exclude_ts=ts,
             )
             if found:
                 start_ts, start_date, _ = found
