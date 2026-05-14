@@ -123,7 +123,9 @@ export function DrumColumn({ items, value, onChange, cyclic = true }: DrumColumn
       lock = now;
       const dir = e.deltaY > 0 ? +1 : -1;
       const next = clampIdx(stateRef.current.curIdx + dir);
-      stateRef.current.curIdx = next;
+      // 注意：不能在这里预设 stateRef.current.curIdx = next，否则下面 applyOffset
+      // 里 `if (newIdx !== stateRef.current.curIdx)` 永远相等 → onChange 不 fire
+      // → 父组件 state 永远停在初值。滚轮只动视觉位移，时间永远不更新。
       applyOffset(idxToOffset(next), true);
       if (cyclic) setTimeout(recenter, 240);
     };
