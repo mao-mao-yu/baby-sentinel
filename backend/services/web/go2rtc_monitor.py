@@ -22,8 +22,13 @@ import services.web.state as state
 from shared.config import ROOT_CFG, log
 
 
-_BAD_PROBES_FOR_BAD     = 5     # 连续 5 次 TCP 失败 (≥15s) → cam_ok=false
-_BAD_PROBES_FOR_RESTART = 8     # 连续 8 次 TCP 失败 (≥24s) → 请求重启
+_PROBE_INTERVAL_S       = 30    # probe 间隔（之前 3s）。socket.create_connection 每次
+                                # 都是一次性新连接 close 后留 TIME_WAIT，3s 间隔每天
+                                # 累积 ~28k TIME_WAIT，把 macOS 16k ephemeral port
+                                # 全填光，所有 localhost 出站连接挂死。30s 后每天
+                                # 累积 ~2900，30s msl×2 后自然消化。
+_BAD_PROBES_FOR_BAD     = 2     # 连续 2 次 (60s) 失败 → cam_ok=false
+_BAD_PROBES_FOR_RESTART = 4     # 连续 4 次 (2min) 失败 → 请求 manager 重启
 _RESTART_COOLDOWN_S     = 90    # 重启请求最小间隔
 
 _bad_count:       int   = 0
@@ -32,12 +37,15 @@ _last_restart_at: float = 0.0
 
 async def _probe_tcp(port: int, timeout: float = 2.0) -> bool:
     """TCP connect 探活。Connect 成功就当 go2rtc 还活着——不走 HTTP 栈避免
-    go2rtc 1.9.14 的 /api API bug。"""
+    go2rtc 1.9.14 的 /api API bug。
+    用 'localhost' 而非 '127.0.0.1'：go2rtc 二进制有时只 bind IPv6 [::]，
+    硬编码 IPv4 会永远连不上。socket.create_connection 会按 getaddrinfo
+    顺序尝试 IPv4 / IPv6，任一成功即可。"""
     loop = asyncio.get_event_loop()
 
     def _connect() -> bool:
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            with socket.create_connection(("localhost", port), timeout=timeout):
                 return True
         except OSError:
             return False
@@ -100,4 +108,4 @@ async def rtsp_loop() -> None:
             if await _trigger_restart():
                 _bad_count = 0
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(_PROBE_INTERVAL_S)
