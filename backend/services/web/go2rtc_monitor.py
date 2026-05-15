@@ -1,22 +1,22 @@
-"""go2rtc 健康监测 + 自愈（精简版）。
+"""go2rtc 健康监测 + 自愈（极简版 / 零 TCP）。
 
-go2rtc 子进程由 manager (`SERVICES['go2rtc']`) 负责拉起；这里只做两件事：
-  1. 周期 TCP connect probe go2rtc 端口（1984）。连得上 → cam_ok=true，否则 false。
-  2. 连续 5 次 (≥15s) TCP 连不上 → POST `/api/manager/go2rtc/restart`（90s cooldown）。
+go2rtc 子进程由 manager (`SERVICES['go2rtc']`) 负责拉起；这里只做：
+  1. 周期 `pgrep -f go2rtc` 检查进程是否还在。
+  2. 连续 N 次找不到进程 → cam_ok=false。
 
-历史教训：曾用 HTTP `/api/streams?src=baby` 探活，看 producer.bytes_recv 是否
-增长来抓 "假活"。但 go2rtc 1.9.14 这个 API 在同时服务多 WebRTC consumer 时
-有 ~50% 概率返回空 body / 偶发 10s lock 卡死。任何基于 HTTP 的判定都不可靠，
-会误把 cam_ok 翻 false → 所有浏览器同步拆 WebRTC → 死循环式 flicker。
-
-纯 TCP probe 不走 go2rtc HTTP 栈，不受 API bug 影响。代价：丢了 "假活" 检测
-（go2rtc 进程在但 RTSP 断流的情况）—— 这场景下浏览器侧 ICE 会自己检测到无帧，
-30-60s 后浏览器主动失败重连；不再依赖服务端帮忙。
+历史教训演进：
+  - v1: HTTP /api/streams?src=baby 探活看 bytes_recv —— go2rtc 1.9.14 该 API
+    50% 空响应、偶发 lock 卡 10s，误判 cam_ok 让前端拆 WebRTC，flicker 死循环。
+  - v2: TCP connect probe localhost:1984 —— 每次 socket.create_connection 是
+    一次性新连接，close 后留 TIME_WAIT。3s 间隔每天累积 28k TIME_WAIT，几小时
+    内耗光 macOS 16k ephemeral port 池，整个 Mac 出站 TCP 全瘫。
+  - v3（本版）: pgrep 检查进程存在。纯 syscall，零网络，零 TIME_WAIT，永久不会
+    把端口池吃光。代价：失去 "假活" 检测（进程在但 RTSP 断流），但浏览器自己
+    的 ICE 在数十秒内会感知到无帧，影响可接受。
 """
 import asyncio
-import socket
+import subprocess
 import time
-import urllib.request
 
 import services.web.state as state
 from shared.config import ROOT_CFG, log
@@ -35,29 +35,33 @@ _bad_count:       int   = 0
 _last_restart_at: float = 0.0
 
 
-async def _probe_tcp(port: int, timeout: float = 2.0) -> bool:
-    """TCP connect 探活。Connect 成功就当 go2rtc 还活着——不走 HTTP 栈避免
-    go2rtc 1.9.14 的 /api API bug。
-    用 'localhost' 而非 '127.0.0.1'：go2rtc 二进制有时只 bind IPv6 [::]，
-    硬编码 IPv4 会永远连不上。socket.create_connection 会按 getaddrinfo
-    顺序尝试 IPv4 / IPv6，任一成功即可。"""
+async def _probe_pgrep() -> bool:
+    """pgrep -f go2rtc 检查进程是否存在。纯 fork/exec syscall，无任何网络连接。
+    pgrep exit 0 = 有匹配 = 活；exit 1 = 无匹配 = 死。"""
     loop = asyncio.get_event_loop()
 
-    def _connect() -> bool:
+    def _check() -> bool:
         try:
-            with socket.create_connection(("localhost", port), timeout=timeout):
-                return True
-        except OSError:
-            return False
+            r = subprocess.run(
+                ["pgrep", "-f", "go2rtc -config"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            return r.returncode == 0
+        except Exception:
+            # subprocess 异常（pgrep 不存在 / timeout）→ 别误报 false，保持上一态
+            return True
 
     try:
-        return await loop.run_in_executor(None, _connect)
+        return await loop.run_in_executor(None, _check)
     except Exception:
-        return False
+        return True
 
 
 async def _trigger_restart() -> bool:
-    """请求 manager 重启 go2rtc。带 cooldown 防抖。"""
+    """go2rtc 进程不在 → 让 manager 重启。带 cooldown 防抖。
+    用 curl 子进程而非 urlopen：避免 server 这边再开新的 TIME_WAIT。
+    （manager 端 webhook 监听本来就是为外部触发设计的，curl 一次性可接受。）"""
     global _last_restart_at
     now = time.time()
     if now - _last_restart_at < _RESTART_COOLDOWN_S:
@@ -67,18 +71,23 @@ async def _trigger_restart() -> bool:
     mgr_port = ROOT_CFG.get("manager_port", 9091)
     loop = asyncio.get_event_loop()
 
-    def _req() -> int:
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{mgr_port}/api/manager/go2rtc/restart",
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status
+    def _req() -> bool:
+        try:
+            r = subprocess.run(
+                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                 "--max-time", "5",
+                 "-X", "POST",
+                 f"http://127.0.0.1:{mgr_port}/api/manager/go2rtc/restart"],
+                capture_output=True, text=True, timeout=8,
+            )
+            return r.stdout.strip() == "200"
+        except Exception:
+            return False
 
     try:
-        status = await loop.run_in_executor(None, _req)
-        log.warning(f"[go2rtc] TCP 持续不通，已请求 manager 重启 → HTTP {status}")
-        return status == 200
+        ok = await loop.run_in_executor(None, _req)
+        log.warning(f"[go2rtc] 进程不在，已请求 manager 重启 → {'OK' if ok else 'FAIL'}")
+        return ok
     except Exception as e:
         log.warning(f"[go2rtc] manager 重启请求失败：{e}")
         return False
@@ -86,11 +95,10 @@ async def _trigger_restart() -> bool:
 
 async def rtsp_loop() -> None:
     global _bad_count
-    port = int(ROOT_CFG.get("go2rtc_port", 1984))
-    log.info(f"[go2rtc] 健康监测启动（TCP probe）→ :{port}")
+    log.info("[go2rtc] 健康监测启动（pgrep 进程检查）")
 
     while True:
-        alive = await _probe_tcp(port)
+        alive = await _probe_pgrep()
 
         if alive:
             _bad_count = 0
@@ -102,7 +110,7 @@ async def rtsp_loop() -> None:
         if ok != state.sensor_state["cam_ok"]:
             state.sensor_state["cam_ok"] = ok
             await state.broadcast({"type": "sensor", **state.sensor_state})
-            log.info(f"[go2rtc] {'就绪' if ok else f'离线 (TCP 连不上, bad={_bad_count})'}")
+            log.info(f"[go2rtc] {'就绪' if ok else f'离线 (进程不在, bad={_bad_count})'}")
 
         if _bad_count >= _BAD_PROBES_FOR_RESTART:
             if await _trigger_restart():
