@@ -153,6 +153,10 @@ export const CONFIG_SCHEMA: ConfigSchema = {
   server: [
     { key: "web_port", type: "int",
       label: { zh: "Web 端口", ja: "Web ポート" } },
+    { key: "baby.feed_times_per_day", type: "int",
+      label: { zh: "每日喂奶次数", ja: "1日の授乳回数" },
+      hint:  { zh: "下次喂奶时间 = 上次 + 24h÷次数；同时用于推荐奶量分摊。留空回退到喂奶间隔",
+               ja: "次の授乳 = 前回 + 24h÷回数。推奨量の分配にも使用。空なら授乳間隔にフォールバック" } },
   ],
   recorder: [
     { key: "segment_s", type: "int",

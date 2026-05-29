@@ -4,7 +4,8 @@
     "birth_date": "YYYYMMDD",
     "weight_g": 0,
     "feed_type": "formula",
-    "feed_interval_min": 150
+    "feed_interval_min": 150,
+    "feed_times_per_day": 8
   },
   "language": "ja",
   "log_level": "INFO",

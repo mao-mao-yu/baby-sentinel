@@ -437,7 +437,15 @@ def get_stats() -> dict:
     diapers  = [e for e in entries if e.get("type") == "diaper"]
     sleeps   = [e for e in entries if e.get("type") == "sleep"]
 
-    interval_min = int(BABY.get("feed_interval_min", 150))
+    # 喂奶节奏：优先用"每日喂奶次数"(feed_times_per_day) 反推间隔；没配则回退
+    # 到老的 feed_interval_min。feeds_per_day 同时供下面推荐奶量分摊用。
+    _ftpd = BABY.get("feed_times_per_day")
+    if _ftpd:
+        feeds_per_day = max(1, int(_ftpd))
+        interval_min  = round(24 * 60 / feeds_per_day)
+    else:
+        interval_min  = int(BABY.get("feed_interval_min", 150))
+        feeds_per_day = max(1, round(24 * 60 / interval_min))
 
     # ── 所有喂奶（倒计时用，跨日连续）────
     last_feed = feeds[-1] if feeds else None
@@ -485,8 +493,9 @@ def get_stats() -> dict:
 
     feed_type = BABY.get("feed_type", "formula")
     if feed_type == "formula":
-        if weight_g and interval_min:
-            feeds_per_day = round(24 * 60 / interval_min)
+        if weight_g and feeds_per_day:
+            # 150 mL/kg/天 ÷ 每日次数。feeds_per_day 已在上面按 feed_times_per_day
+            # 或 interval 算好，跟 next_feed_ts 用同一套节奏。
             rec_ml = max(10, round(weight_g * 0.15 / feeds_per_day))
         elif age_days:
             rec_ml = min(90, 30 + age_days * 3)
