@@ -546,12 +546,35 @@ function NumberStepper({ value, onChange, min, max, step, unit }: {
   min: number; max: number; step: number; unit?: string;
 }) {
   const clamp = (v: number) => Math.max(min, Math.min(max, +v.toFixed(2)));
+  // 本地文本态：让用户能清空 / 输中间态（删光重输、输小数点）。
+  // 踩过的坑：之前 onChange 里 clamp(parseFloat(e)||0) —— 清空时 parseFloat("")=NaN
+  // → ||0 → clamp(0) → 弹回 min（体重 min=1000），根本删不掉重输。
+  // 现在：编辑时只夹上限（防溢出）实时上报 parent，下限留到失焦再补；
+  // 空 / 非法输入不上报，保留上一个合法值。
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    // 仅当外部 value 与当前文本数值不一致才同步（+/- 按钮 / 重开 picker）；
+    // 避免覆盖用户正在输的中间态（如 "3." / "3.5"）。
+    if (parseFloat(text) !== value) setText(String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
   return (
     <div className="flex items-center gap-2">
       <Button type="button" variant="outline" size="sm"
               onClick={() => onChange(clamp(value - step))}>−</Button>
-      <Input type="number" value={value}
-             onChange={(e) => onChange(clamp(parseFloat(e.target.value) || 0))}
+      <Input type="number" value={text}
+             onChange={(e) => {
+               setText(e.target.value);
+               const n = parseFloat(e.target.value);
+               if (!isNaN(n)) onChange(Math.min(max, n));   // 只夹上限，下限 blur 补
+             }}
+             onBlur={() => {
+               const n = parseFloat(text);
+               const v = isNaN(n) ? value : clamp(n);
+               setText(String(v));
+               onChange(v);
+             }}
              min={min} max={max} step={step}
              className="h-9 text-center" />
       <Button type="button" variant="outline" size="sm"
