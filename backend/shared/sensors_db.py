@@ -12,6 +12,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 
 from shared.config import BASE_DIR, REC_DIR, log
@@ -24,10 +25,21 @@ _db_lock = threading.Lock()
 
 # ── 连接 / Schema ─────────────────────────────────────────────────────
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect():
+    """SQLite 连接 context manager —— 成功 commit / 异常 rollback / 总是 close。
+    裸 `with sqlite3.connect() as conn` 只管事务不 close 连接，会泄漏 fd。
+    见 services/web/baby_log.py 同处注释。"""
     conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _init_db() -> None:

@@ -11,6 +11,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
 from shared.config import BASE_DIR, log
@@ -30,10 +31,25 @@ _db_lock = threading.Lock()
 
 # ── SQLite 连接 / Schema ──────────────────────────────────────────────
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect():
+    """SQLite 连接的 context manager —— 成功 commit / 异常 rollback / **总是 close**。
+
+    踩过的坑：之前 _connect() 直接返回裸 Connection，调用方 `with _connect() as conn:`。
+    但 sqlite3.Connection 的 __exit__ 只 commit/rollback 事务，**不 close 连接**。
+    于是每次 _connect() 都泄漏一个打开的 fd（baby_log.db 句柄）。日积月累 server.py
+    打开 60+ 个 baby_log.db 句柄，逼近 macOS 256 fd 上限 → 周期性崩溃被 manager 重启。
+    用 @contextmanager + finally conn.close() 根治。"""
     conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _init_db() -> None:
