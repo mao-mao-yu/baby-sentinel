@@ -292,11 +292,6 @@ async def internal_sensor_push(request: Request):
         level = data.get("level", "warning")
         mode  = data.get("mode")          # 设备原始 alertMode（int），sense-u-ble v2 起带这个字段
         ts    = data.get("timestamp")
-        # mode=81 = 充电完成。不是危险事件，强制降级为 info：BARK 走 passive（不响铃 / 仅出现在通知中心），
-        # Discord 蓝色 embed。raw_msg 设备侧可能没翻译 "charge complete" → 走 alert_mode_label 拿本地化。
-        if mode == 81:
-            level = "info"
-            msg   = alert_mode_label("charge complete")
         if ROOT_CFG.get("alert_notify_enabled", True):
             log.info("[AlertPush] dispatch mode=%s level=%s msg=%s", mode, level, msg)
             await trigger_alert(msg, level)
