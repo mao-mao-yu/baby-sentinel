@@ -106,6 +106,7 @@ _TR: dict[str, dict] = {
             "prone + breath weak":      "🚨 うつ伏せ + 呼吸微弱",
             "activity alert":           "⚡ 活動異常",
             "prone sleep breath weak":  "🚨 うつ伏せ就寝 + 呼吸微弱",
+            "charge complete":          "🔋 充電完了",
         },
     },
     "zh": {
@@ -196,6 +197,7 @@ _TR: dict[str, dict] = {
             "prone + breath weak":      "🚨 俯卧 + 呼吸微弱",
             "activity alert":           "⚡ 活动异常",
             "prone sleep breath weak":  "🚨 俯卧睡眠 + 呼吸微弱",
+            "charge complete":          "🔋 充电完成",
         },
     },
 }
