@@ -425,6 +425,20 @@ def _latest_weight_g(data: dict) -> int | None:
         return None
 
 
+def feed_cadence() -> tuple[int, int]:
+    """喂奶节奏单一信源：(interval_min, feeds_per_day)。
+    feed_times_per_day（每日喂奶次数）优先；没配则用老的 feed_interval_min。
+    server.py 的 _feed_reminder_loop 和 get_stats() 都应通过这里读，避免散落。"""
+    ftpd = BABY.get("feed_times_per_day")
+    if ftpd:
+        feeds_per_day = max(1, int(ftpd))
+        interval_min  = round(24 * 60 / feeds_per_day)
+    else:
+        interval_min  = int(BABY.get("feed_interval_min", 150))
+        feeds_per_day = max(1, round(24 * 60 / interval_min))
+    return interval_min, feeds_per_day
+
+
 def get_stats() -> dict:
     data          = _load()
     today_str     = _today()
@@ -437,15 +451,7 @@ def get_stats() -> dict:
     diapers  = [e for e in entries if e.get("type") == "diaper"]
     sleeps   = [e for e in entries if e.get("type") == "sleep"]
 
-    # 喂奶节奏：优先用"每日喂奶次数"(feed_times_per_day) 反推间隔；没配则回退
-    # 到老的 feed_interval_min。feeds_per_day 同时供下面推荐奶量分摊用。
-    _ftpd = BABY.get("feed_times_per_day")
-    if _ftpd:
-        feeds_per_day = max(1, int(_ftpd))
-        interval_min  = round(24 * 60 / feeds_per_day)
-    else:
-        interval_min  = int(BABY.get("feed_interval_min", 150))
-        feeds_per_day = max(1, round(24 * 60 / interval_min))
+    interval_min, feeds_per_day = feed_cadence()
 
     # ── 所有喂奶（倒计时用，跨日连续）────
     last_feed = feeds[-1] if feeds else None

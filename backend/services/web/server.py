@@ -76,7 +76,9 @@ async def _feed_reminder_loop():
     while True:
         await asyncio.sleep(60)
         try:
-            interval_min   = int(BABY.get("feed_interval_min", 150))
+            # 通过 baby_log.feed_cadence 读，跟 get_stats / 前端倒计时同一来源；
+            # feed_times_per_day 优先，feed_interval_min 兜底。
+            interval_min, _ = baby_log.feed_cadence()
             feed_threshold = interval_min * 60
 
             last = baby_log.get_last_feed()
