@@ -38,6 +38,8 @@ _BLE_FIELDS = frozenset((
     "battery", "wearing", "charge", "activity",
     "ble_ok", "last_update",
 ))
+_BREATH_WEAK_ALERT_MODES = frozenset((9, 10, 65))
+_MUTED_ACK_MODES = frozenset((2, 3, 4, 7, 8, 11))
 
 _FEED_REPEAT        = FEED_REPEAT_S
 _BLE_HEALTH_TIMEOUT = BLE_HEALTH_TIMEOUT_S
@@ -285,12 +287,14 @@ async def internal_sensor_push(request: Request):
     elif data.get("type") == "alert":
         # Pi 端 sense-u-ble 不接通知渠道，由本服务端统一收口
         global _alert_event, _alert_data
-        raw_msg = data.get("message", "")
-        # sense-u-ble 推送的是固定英文 enum (见其 README "Alert modes" 表)；
-        # 这里在出口处统一翻成 ROOT_CFG.language，BARK / Discord / WS / 弹窗一份消息走全程。
-        msg   = alert_mode_label(raw_msg)
+        mode = data.get("mode")
+        if mode not in _BREATH_WEAK_ALERT_MODES:
+            log.info("[AlertPush] suppressed mode=%s", mode)
+            return JSONResponse({"ok": True, "ack": mode in _MUTED_ACK_MODES})
+        # 组合事件也统一显示“呼吸微弱”，避免把俯卧当成独立报警原因。
+        # BARK / Discord / WS / 弹窗一份本地化消息走全程。
+        msg   = alert_mode_label("breath weak")
         level = data.get("level", "warning")
-        mode  = data.get("mode")          # 设备原始 alertMode（int），sense-u-ble v2 起带这个字段
         ts    = data.get("timestamp")
         if ROOT_CFG.get("alert_notify_enabled", True):
             log.info("[AlertPush] dispatch mode=%s level=%s msg=%s", mode, level, msg)
